@@ -12,7 +12,8 @@
     "seed:deployments": "bun run src/generator/index.ts deployments",
     "seed:incidents": "bun run src/generator/index.ts incidents",
     "seed:all": "bun run src/generator/index.ts all",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "run:pipeline": "bun run src/agents/runPipeline.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
