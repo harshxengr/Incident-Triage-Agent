@@ -15,6 +15,15 @@ runWorker(STREAMS.NEW, GROUPS.LOG_ANALYZER, "log-analyzer-1", async (fields, cli
   }
   const incident = await prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
 
+  // idempotency guard: if this incident has already entered or finished
+  // the pipeline, don't reprocess it. without this, re-enqueueing the
+  // same id (accidentally, or via a retry) resets a resolved incident
+  // back to DIAGNOSING and runs the whole pipeline again.
+  if (incident.status !== "OPEN") {
+    console.log(`[log-analyzer-1] skipping ${incidentId} - already in status "${incident.status}", not reprocessing`);
+    return;
+  }
+
   await prisma.incident.update({ where: { id: incidentId }, data: { status: "DIAGNOSING" } });
 
   const logAnalysis = await analyzeLog(llm, incident.rawLog);

@@ -30,7 +30,7 @@ runWorker(STREAMS.ACTION_DECIDED, GROUPS.COMMUNICATOR, "communicator-1", async (
   const diagnosis = diagnosisAction.output as unknown as Diagnosis;
   const actionDecision = actionAction.output as unknown as ActionDecision;
 
-  const communicatorOutput = await communicate(llm, notifier, incident.title, diagnosis, actionDecision);
+  const communicatorOutput = await communicate(llm, notifier, incidentId, incident.title, diagnosis, actionDecision);
   await logAction({
     incidentId,
     agentType: "COMMUNICATOR",

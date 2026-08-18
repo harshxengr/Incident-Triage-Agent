@@ -62,7 +62,7 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     },
   });
 
-  const communicatorOutput = await communicate(llm, notifier, incident.title, diagnosis, actionDecision);
+  const communicatorOutput = await communicate(llm, notifier, incidentId, incident.title, diagnosis, actionDecision);
   await logAction({
     incidentId,
     agentType: "COMMUNICATOR",
