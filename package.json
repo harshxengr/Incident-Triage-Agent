@@ -15,7 +15,10 @@
     "typecheck": "bunx tsc --noEmit",
     "run:pipeline": "bun run src/agents/runPipeline.ts",
     "workers:start": "bun run src/workers/runAll.ts",
-    "enqueue": "bun run src/streams/enqueueIncident.ts"
+    "enqueue": "bun run src/streams/enqueueIncident.ts",
+    "approve": "bun run src/agents/approve.ts",
+    "reject": "bun run src/agents/reject.ts",
+    "approval-server": "bun run src/workers/approvalServer.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
