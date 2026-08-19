@@ -11,7 +11,7 @@ import { STREAMS, GROUPS } from "../streams/topics";
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
 const notifier = new ConsoleNotifier();
 
-runWorker(STREAMS.ACTION_DECIDED, GROUPS.COMMUNICATOR, "communicator-1", async (fields) => {
+runWorker(STREAMS.ACTION_DECIDED, GROUPS.COMMUNICATOR, "communicator-1", async (fields, client) => {
   const incidentId = fields.incidentId;
   if (!incidentId) {
     throw new Error("Missing incidentId in stream message");
@@ -36,6 +36,7 @@ runWorker(STREAMS.ACTION_DECIDED, GROUPS.COMMUNICATOR, "communicator-1", async (
     agentType: "COMMUNICATOR",
     input: { diagnosis, actionDecision },
     output: communicatorOutput,
+    broadcast: client,
   });
 }).catch((err) => {
   console.error("communicator worker crashed:", err);

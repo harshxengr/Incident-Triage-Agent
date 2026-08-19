@@ -1,5 +1,5 @@
 {
-  "name": "incident-triage-agent",
+  "name": "backend",
   "module": "index.ts",
   "type": "module",
   "private": true,
@@ -18,7 +18,8 @@
     "enqueue": "bun run src/streams/enqueueIncident.ts",
     "approve": "bun run src/agents/approve.ts",
     "reject": "bun run src/agents/reject.ts",
-    "approval-server": "bun run src/workers/approvalServer.ts"
+    "approval-server": "bun run src/workers/approvalServer.ts",
+    "dashboard-server": "bun run src/workers/dashboardServer.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

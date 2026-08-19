@@ -32,6 +32,7 @@ runWorker(STREAMS.NEW, GROUPS.LOG_ANALYZER, "log-analyzer-1", async (fields, cli
     agentType: "LOG_ANALYZER",
     input: { rawLog: incident.rawLog },
     output: logAnalysis,
+    broadcast: client,
   });
 
   await xadd(client, STREAMS.LOG_ANALYZED, { incidentId });

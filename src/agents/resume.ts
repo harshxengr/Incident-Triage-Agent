@@ -1,6 +1,7 @@
 import { prisma } from "../db/client";
 import { logAction } from "../db/logAction";
 import type { Notifier } from "../notifier/client";
+import { createStreamClient } from "../streams/client";
 
 export type ResumeDecision = "approved" | "rejected";
 
@@ -51,6 +52,7 @@ export async function resumeIncident(
         orderBy: { createdAt: "desc" },
     });
 
+    const broadcastClient = createStreamClient();
     await logAction({
         incidentId,
         agentType: "ORCHESTRATOR",
@@ -60,7 +62,9 @@ export async function resumeIncident(
             decision === "approved"
                 ? `${decidedBy} approved the proposed action.`
                 : `${decidedBy} rejected the proposed action.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`,
+        broadcast: broadcastClient,
     });
+    broadcastClient.close();
 
     const incident = await prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
 

@@ -43,6 +43,7 @@ runWorker(STREAMS.LOG_ANALYZED, GROUPS.DIAGNOSIS, "diagnosis-1", async (fields, 
     input: { logAnalysis, candidates },
     output: diagnosis,
     confidence: diagnosis.confidence,
+    broadcast: client,
   });
 
   await xadd(client, STREAMS.DIAGNOSED, { incidentId });

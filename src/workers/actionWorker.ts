@@ -29,6 +29,7 @@ runWorker(STREAMS.DIAGNOSED, GROUPS.ACTION, "action-1", async (fields, client) =
     output: actionDecision,
     reasoning: actionDecision.reasoning,
     confidence: actionDecision.confidence,
+    broadcast: client,
   });
 
   await prisma.incident.update({
