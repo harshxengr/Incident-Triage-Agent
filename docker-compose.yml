@@ -1,0 +1,23 @@
+name: incident-triage-agent
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: triage_dev_password
+      POSTGRES_DB: incident_triage
+    ports:
+      - "5432:5432"
+    volumes:
+      - triage_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  triage_pg_data:
