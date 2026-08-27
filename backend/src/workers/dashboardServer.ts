@@ -16,7 +16,7 @@ class RateLimiter {
   constructor(
     private readonly limit: number,
     private readonly windowMs: number,
-  ) {}
+  ) { }
 
   allows(key: string): boolean {
     const now = Date.now();
@@ -64,6 +64,19 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    if (url.pathname === "/healthz" && req.method === "GET") {
+      try {
+        await Promise.race([
+          prisma.$queryRaw`SELECT 1`,
+          new Promise((_, reject) => setTimeout(() => reject(new Error("DB query timed out after 5s")), 5000)),
+        ]);
+        return json({ status: "ok" });
+      } catch (err) {
+        console.error("Health check DB query failed:", err);
+        return json({ status: "error", detail: String(err) }, 503);
+      }
     }
 
     if (url.pathname === "/demo/trigger" && req.method === "POST") {
