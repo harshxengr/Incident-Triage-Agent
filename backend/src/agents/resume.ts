@@ -18,18 +18,10 @@ export async function resumeIncident(
     notifier: Notifier,
     rejectionReason?: string
 ): Promise<ResumeResult> {
-    // Conditional update, not read-then-write: only an incident that is
-    // STILL pending approval gets transitioned. Two people racing to
-    // resolve the same incident (or a double click) should not both
-    // succeed - same class of problem as two concurrent transfers hitting
-    // one wallet balance in PixelPay, solved the same way. Verified this
-    // exact pattern against a real Postgres instance: fired approve and
-    // reject at the same incident simultaneously, 5 times, exactly one
-    // update ever landed.
     const updated = await prisma.incident.updateMany({
         where: { id: incidentId, status: "PENDING_APPROVAL" },
         data: {
-            status: decision === "approved" ? "RESOLVED" : "REJECTED",
+            status: decision === "approved" ? "FAILED" : "REJECTED",
             resolvedAt: new Date(),
         },
     });
@@ -78,7 +70,7 @@ export async function resumeIncident(
 
     const message =
         decision === "approved"
-            ? `Incident "${incident.title}" approved by ${decidedBy} and marked resolved. (Action execution is simulated in this project.)`
+            ? `Incident "${incident.title}" approved by ${decidedBy}, but the simulated action was not executed.`
             : `Incident "${incident.title}" rejected by ${decidedBy}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""} Needs manual follow-up.`;
 
     await notifier.send(message);

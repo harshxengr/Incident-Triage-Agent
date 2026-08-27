@@ -48,8 +48,15 @@ runWorker(
     await prisma.incident.update({
       where: { id: incidentId },
       data: {
-        status: actionDecision.requiresHuman ? "PENDING_APPROVAL" : "RESOLVED",
-        resolvedAt: actionDecision.requiresHuman ? null : new Date(),
+        status: actionDecision.requiresHuman
+          ? "PENDING_APPROVAL"
+          : executionSucceeded(actionDecision.execution)
+            ? "RESOLVED"
+            : "FAILED",
+        resolvedAt:
+          !actionDecision.requiresHuman && executionSucceeded(actionDecision.execution)
+            ? new Date()
+            : null,
         suspectedDeploymentId: diagnosis.suspectedDeploymentId,
       },
     });
@@ -60,3 +67,7 @@ runWorker(
 ).catch((err) => {
   console.error("action worker crashed:", err);
 });
+
+function executionSucceeded(execution: { executed: boolean } | undefined): boolean {
+  return execution?.executed === true;
+}

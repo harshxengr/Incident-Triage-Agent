@@ -8,17 +8,53 @@ import { parseSlackInteractionBody } from "../webhooks/slackInteraction";
 import { STREAMS } from "../streams/topics";
 import { resumeIncident } from "../agents/resume";
 import { SlackNotifier } from "../notifier/client";
+import { triggerDemoIncident } from "../streams/triggerDemoIncident";
+
+class RateLimiter {
+  private readonly requests = new Map<string, number[]>();
+
+  constructor(
+    private readonly limit: number,
+    private readonly windowMs: number,
+  ) {}
+
+  allows(key: string): boolean {
+    const now = Date.now();
+    const recent = (this.requests.get(key) ?? []).filter(
+      (timestamp) => now - timestamp < this.windowMs,
+    );
+
+    if (recent.length >= this.limit) {
+      this.requests.set(key, recent);
+      return false;
+    }
+
+    recent.push(now);
+    this.requests.set(key, recent);
+    return true;
+  }
+}
+
+const demoLimiter = new RateLimiter(1, 30_000);
 
 const PORT = Number(process.env.DASHBOARD_PORT ?? 3002);
 
 const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*", // fine for local dev; lock this down before deploying anywhere real
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: CORS_HEADERS });
+}
+
+async function readJson(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    return null;
+  }
 }
 
 const server = Bun.serve({
@@ -28,6 +64,21 @@ const server = Bun.serve({
 
     if (req.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
+    }
+
+    if (url.pathname === "/demo/trigger" && req.method === "POST") {
+      const clientIp = req.headers.get("x-forwarded-for") ?? "unknown";
+      if (!demoLimiter.allows(clientIp)) {
+        return json({ error: "Please wait a bit before triggering another demo incident." }, 429);
+      }
+
+      try {
+        const result = await triggerDemoIncident();
+        return json(result, 201);
+      } catch (error) {
+        console.error("Failed to create demo incident:", error);
+        return json({ error: "Could not create demo incident" }, 500);
+      }
     }
 
     if (url.pathname === "/ws") {
@@ -40,7 +91,7 @@ const server = Bun.serve({
       if (!checkApiKey(req, process.env.WEBHOOK_API_KEY!)) {
         return json({ error: "unauthorized" }, 401);
       }
-      const body = await req.json();
+      const body = await readJson(req);
       const validation = validateIncidentPayload(body);
       if (!validation.ok) return json({ errors: validation.errors }, 400);
 
@@ -68,7 +119,7 @@ const server = Bun.serve({
       if (!checkApiKey(req, process.env.WEBHOOK_API_KEY!)) {
         return json({ error: "unauthorized" }, 401);
       }
-      const body = await req.json();
+      const body = await readJson(req);
       const validation = validateDeploymentPayload(body);
       if (!validation.ok) return json({ errors: validation.errors }, 400);
 
