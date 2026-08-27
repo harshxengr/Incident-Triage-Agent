@@ -14,8 +14,8 @@ if (incident) {
   console.log(`Severity: ${incident.severity}`);
   console.log(`Actions: ${incident.actions.length}`);
   if (incident.actions.length > 0) {
-    incident.actions.forEach(action => {
-      console.log(`  - ${action.name}: approved=${action.approved}`);
+    incident.actions.forEach((action) => {
+      console.log(`  - ${action.agentType}: ${JSON.stringify(action.output)}`);
     });
   }
   console.log(`Created: ${incident.createdAt}`);

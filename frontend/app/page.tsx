@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3002";
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:3002/ws";
@@ -33,6 +33,7 @@ function StatusBadge({ status }: { status: string }) {
     RESOLVED: "#28a745",
     REJECTED: "#6c757d",
     FALSE_POSITIVE: "#6c757d",
+    FAILED: "#b45309",
   };
   return <span style={{ color: colors[status] ?? "#000", fontWeight: "bold" }}>{status}</span>;
 }
@@ -41,39 +42,73 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [triggering, setTriggering] = useState(false);
+
+  async function fetchIncidents() {
+    const response = await fetch(`${API_BASE}/api/incidents`);
+    if (!response.ok) throw new Error(`Incident request failed: ${response.status}`);
+    return response.json() as Promise<Incident[]>;
+  }
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/incidents`)
-      .then((r) => r.json())
+    fetchIncidents()
       .then(setIncidents)
       .catch((err) => console.error("failed to load incidents:", err));
   }, []);
 
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
 
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onmessage = (e) => {
-      const event: AgentEvent = JSON.parse(e.data);
+      let event: AgentEvent;
+      try {
+        event = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      if (typeof event.incidentId !== "string" || typeof event.agentType !== "string") return;
       setEvents((prev) => [event, ...prev].slice(0, 100));
 
-      // simplest way to keep the incident list's status column current -
-      // refetch on every event rather than trying to patch state in place
-      fetch(`${API_BASE}/api/incidents`)
-        .then((r) => r.json())
+      fetchIncidents()
         .then(setIncidents)
-        .catch(() => { });
+        .catch((err) => console.error("failed to refresh incidents:", err));
     };
 
     return () => ws.close();
   }, []);
 
+  async function handleTriggerDemo() {
+  setTriggering(true);
+  try {
+    const response = await fetch(`${API_BASE}/demo/trigger`, { method: "POST" });
+    if (!response.ok) throw new Error(`Demo request failed: ${response.status}`);
+  } catch (err) {
+    console.error("Failed to trigger demo:", err);
+  } finally {
+    setTimeout(() => setTriggering(false), 3000); // matches the rate limit window roughly
+  }
+}
+
   return (
     <main style={{ fontFamily: "monospace", padding: "2rem", maxWidth: 1200, margin: "0 auto" }}>
       <h1 style={{ marginBottom: 4 }}>Incident Triage Dashboard</h1>
+
+      <button
+  onClick={handleTriggerDemo}
+  disabled={triggering}
+  style={{
+    marginBottom: 24,
+    padding: "8px 16px",
+    fontFamily: "monospace",
+    cursor: triggering ? "not-allowed" : "pointer",
+    opacity: triggering ? 0.5 : 1,
+  }}
+>
+  {triggering ? "Triggering..." : "▶ Trigger a Live Demo Incident"}
+</button>
+
       <p style={{ color: connected ? "green" : "red", marginBottom: 24 }}>
         {connected ? "● live" : "○ disconnected"}
       </p>

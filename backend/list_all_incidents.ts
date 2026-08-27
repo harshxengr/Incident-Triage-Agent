@@ -14,8 +14,8 @@ incidents.forEach(incident => {
   console.log(`Service: ${incident.service}`);
   console.log(`Actions: ${incident.actions.length}`);
   if (incident.actions.length > 0) {
-    incident.actions.forEach(action => {
-      console.log(`  - Action ${action.id}: approved=${action.approved}`);
+    incident.actions.forEach((action) => {
+      console.log(`  - ${action.agentType}: ${JSON.stringify(action.output)}`);
     });
   }
   console.log();

@@ -51,7 +51,7 @@ export async function readGroup(
   stream: string,
   group: string,
   consumer: string,
-  blockMs = 5000
+  blockMs = Number(process.env.STREAM_BLOCK_MS ?? 5000)
 ): Promise<StreamEntry[]> {
   const result = await client.send("XREADGROUP", [
     "GROUP", group, consumer,
