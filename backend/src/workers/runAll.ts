@@ -1,3 +1,13 @@
+Bun.serve({
+  port: Number(process.env.PORT ?? process.env.WORKER_HEALTH_PORT ?? 3003),
+  fetch(req) {
+    if (new URL(req.url).pathname === "/healthz") {
+      return new Response("ok", { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  },
+});
+
 import "./logAnalyzerWorker";
 import "./diagnosisWorker";
 import "./actionWorker";

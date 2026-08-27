@@ -37,7 +37,7 @@ class RateLimiter {
 
 const demoLimiter = new RateLimiter(1, 30_000);
 
-const PORT = Number(process.env.DASHBOARD_PORT ?? 3002);
+const PORT = Number(process.env.PORT ?? process.env.DASHBOARD_PORT ?? 3002);
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
