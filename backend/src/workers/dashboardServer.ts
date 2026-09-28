@@ -254,6 +254,50 @@ const server = Bun.serve({
         );
       }
 
+      const historyMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/history$/);
+      if (historyMatch && req.method === "GET") {
+        const incident = await prisma.incident.findUnique({
+          where: { id: historyMatch[1] },
+          select: {
+            id: true,
+            title: true,
+            rawLog: true,
+            service: true,
+            severity: true,
+            status: true,
+            scenarioType: true,
+            createdAt: true,
+            resolvedAt: true,
+            actions: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                agentType: true,
+                input: true,
+                output: true,
+                reasoning: true,
+                confidence: true,
+                createdAt: true,
+              },
+            },
+          },
+        });
+
+        if (!incident) return json({ error: "not found" }, 404);
+
+        return json({
+          ...incident,
+          timeline: incident.actions.map((action) => ({
+            agentType: action.agentType,
+            input: action.input,
+            output: action.output,
+            reasoning: action.reasoning,
+            confidence: action.confidence,
+            createdAt: action.createdAt,
+          })),
+          actions: undefined,
+        });
+      }
+
       const incidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)$/);
       if (incidentMatch && req.method === "GET") {
         const incident = await prisma.incident.findUnique({
