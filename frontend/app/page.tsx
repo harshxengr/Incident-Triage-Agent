@@ -29,6 +29,14 @@ interface Incident {
   scenarioType: string;
   createdAt: string;
   resolvedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  rejectedAt: string | null;
+  rejectedBy: string | null;
+  rejectionReason: string | null;
+  executionStartedAt: string | null;
+  executionCompletedAt: string | null;
+  failureReason: string | null;
   logAnalysis: {
     errorCount: number | null;
     timeWindowMinutes: number | null;
@@ -66,6 +74,14 @@ interface IncidentHistory {
   scenarioType: string;
   createdAt: string;
   resolvedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  rejectedAt: string | null;
+  rejectedBy: string | null;
+  rejectionReason: string | null;
+  executionStartedAt: string | null;
+  executionCompletedAt: string | null;
+  failureReason: string | null;
   timeline: TimelineEvent[];
 }
 
@@ -82,7 +98,11 @@ function StatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     OPEN: "#888",
     DIAGNOSING: "#e0a800",
+    DIAGNOSED: "#805ad5",
+    ACTION_PROPOSED: "#805ad5",
     PENDING_APPROVAL: "#d9534f",
+    APPROVED: "#3182ce",
+    EXECUTING: "#3182ce",
     RESOLVED: "#28a745",
     REJECTED: "#6c757d",
     FALSE_POSITIVE: "#6c757d",
@@ -115,6 +135,69 @@ function timelineLabel(agentType: string, output: unknown): string {
   }
 
   return agentType;
+}
+
+const LIFECYCLE_STEPS = [
+  "OPEN",
+  "DIAGNOSING",
+  "DIAGNOSED",
+  "ACTION_PROPOSED",
+  "PENDING_APPROVAL",
+  "APPROVED",
+  "EXECUTING",
+  "RESOLVED",
+] as const;
+
+function lifecycleIndex(status: string): number {
+  if (status === "REJECTED" || status === "FAILED") {
+    return LIFECYCLE_STEPS.indexOf("PENDING_APPROVAL");
+  }
+  return Math.max(0, LIFECYCLE_STEPS.indexOf(status as (typeof LIFECYCLE_STEPS)[number]));
+}
+
+function Lifecycle({ status }: { status: string }) {
+  const current = lifecycleIndex(status);
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+      {LIFECYCLE_STEPS.map((step, index) => {
+        const done = index < current || status === "RESOLVED";
+        const active = index === current && status !== "RESOLVED";
+        return (
+          <span
+            key={step}
+            style={{
+              padding: "4px 7px",
+              border: "1px solid #ccc",
+              fontSize: 10,
+              fontWeight: done || active ? "bold" : "normal",
+              opacity: done || active ? 1 : 0.45,
+              background: done
+                ? "#edf7ed"
+                : active
+                  ? "#eef6ff"
+                  : "#fafafa",
+            }}
+          >
+            {done ? "✓ " : active ? "→ " : ""}{step}
+          </span>
+        );
+      })}
+      {(status === "REJECTED" || status === "FAILED") && (
+        <span
+          style={{
+            padding: "4px 7px",
+            border: "1px solid #c53030",
+            color: "#c53030",
+            fontSize: 10,
+            fontWeight: "bold",
+          }}
+        >
+          {status}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function readObject(value: unknown): Record<string, unknown> | null {
@@ -702,6 +785,7 @@ export default function Dashboard() {
                       {selectedHistory.service} · {selectedHistory.severity} ·{" "}
                       <StatusBadge status={selectedHistory.status} />
                     </div>
+                    <Lifecycle status={selectedHistory.status} />
                   </div>
 
                   <button
@@ -730,10 +814,48 @@ export default function Dashboard() {
 
                   <div style={{ fontSize: 12, color: "#555" }}>
                     Created: {formatDate(selectedHistory.createdAt)}
+                    {selectedHistory.approvedAt
+                      ? ` · Approved: ${formatDate(selectedHistory.approvedAt)}`
+                      : ""}
+                    {selectedHistory.executionStartedAt
+                      ? ` · Execution started: ${formatDate(selectedHistory.executionStartedAt)}`
+                      : ""}
+                    {selectedHistory.executionCompletedAt
+                      ? ` · Execution finished: ${formatDate(selectedHistory.executionCompletedAt)}`
+                      : ""}
                     {selectedHistory.resolvedAt
                       ? ` · Finished: ${formatDate(selectedHistory.resolvedAt)}`
                       : ""}
                   </div>
+
+                  {selectedHistory.approvedBy && (
+                    <div style={{ fontSize: 11, marginBottom: 8 }}>
+                      <strong>Approved by:</strong> {selectedHistory.approvedBy}
+                    </div>
+                  )}
+
+                  {selectedHistory.rejectedBy && (
+                    <div style={{ fontSize: 11, marginBottom: 8 }}>
+                      <strong>Rejected by:</strong> {selectedHistory.rejectedBy}
+                      {selectedHistory.rejectionReason
+                        ? ` — ${selectedHistory.rejectionReason}`
+                        : ""}
+                    </div>
+                  )}
+
+                  {selectedHistory.failureReason && (
+                    <div
+                      style={{
+                        fontSize: 11,
+                        marginBottom: 8,
+                        padding: 8,
+                        background: "#fff5f5",
+                        border: "1px solid #c53030",
+                      }}
+                    >
+                      <strong>Failure:</strong> {selectedHistory.failureReason}
+                    </div>
+                  )}
 
                   <div
                     style={{
