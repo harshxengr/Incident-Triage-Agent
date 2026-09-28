@@ -31,7 +31,11 @@ enum IncidentSeverity {
 enum IncidentStatus {
   OPEN
   DIAGNOSING
+  DIAGNOSED
+  ACTION_PROPOSED
   PENDING_APPROVAL
+  APPROVED
+  EXECUTING
   RESOLVED
   REJECTED
   FALSE_POSITIVE
@@ -76,8 +80,16 @@ model Incident {
   expectedRequiresHuman Boolean @default(false)
   scenarioType          String
 
-  createdAt  DateTime  @default(now())
-  resolvedAt DateTime?
+  createdAt           DateTime  @default(now())
+  resolvedAt          DateTime?
+  approvedAt          DateTime?
+  approvedBy          String?
+  rejectedAt          DateTime?
+  rejectedBy          String?
+  rejectionReason     String?   @db.Text
+  executionStartedAt  DateTime?
+  executionCompletedAt DateTime?
+  failureReason       String?   @db.Text
 
   actions AgentAction[]
 
