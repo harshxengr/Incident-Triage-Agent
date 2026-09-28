@@ -30,9 +30,45 @@ runWorker(
 
     const actionDecision = await decideAction(llm, diagnosis);
 
+    // Persist the decision before execution so the lifecycle always records
+    // the moment the agent proposed an action.
+    await prisma.incident.update({
+      where: { id: incidentId },
+      data: {
+        status: "ACTION_PROPOSED",
+        resolvedAt: null,
+        failureReason: null,
+        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+      },
+    });
+
     if (!actionDecision.requiresHuman) {
+      await prisma.incident.update({
+        where: { id: incidentId },
+        data: {
+          status: "EXECUTING",
+          executionStartedAt: new Date(),
+        },
+      });
+
       const execution = await executor.execute(actionDecision.action, actionDecision.target);
       actionDecision.execution = execution;
+
+      const resolved = executionSucceeded(execution);
+      await prisma.incident.update({
+        where: { id: incidentId },
+        data: {
+          status: resolved ? "RESOLVED" : "FAILED",
+          resolvedAt: resolved ? new Date() : null,
+          executionCompletedAt: new Date(),
+          failureReason: resolved ? null : execution.detail,
+        },
+      });
+    } else {
+      await prisma.incident.update({
+        where: { id: incidentId },
+        data: { status: "PENDING_APPROVAL" },
+      });
     }
 
     await logAction({
@@ -43,22 +79,6 @@ runWorker(
       reasoning: actionDecision.reasoning,
       confidence: actionDecision.confidence,
       broadcast: client,
-    });
-
-    await prisma.incident.update({
-      where: { id: incidentId },
-      data: {
-        status: actionDecision.requiresHuman
-          ? "PENDING_APPROVAL"
-          : executionSucceeded(actionDecision.execution)
-            ? "RESOLVED"
-            : "FAILED",
-        resolvedAt:
-          !actionDecision.requiresHuman && executionSucceeded(actionDecision.execution)
-            ? new Date()
-            : null,
-        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
-      },
     });
 
     await xadd(client, STREAMS.ACTION_DECIDED, { incidentId });
