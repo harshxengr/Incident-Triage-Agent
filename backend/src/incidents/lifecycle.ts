@@ -1,7 +1,17 @@
-import type { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../db/client";
 
-export type IncidentStatus = Prisma.IncidentStatus;
+export type IncidentStatus =
+  | "OPEN"
+  | "DIAGNOSING"
+  | "DIAGNOSED"
+  | "ACTION_PROPOSED"
+  | "PENDING_APPROVAL"
+  | "APPROVED"
+  | "EXECUTING"
+  | "RESOLVED"
+  | "REJECTED"
+  | "FALSE_POSITIVE"
+  | "FAILED";
 
 const ACTIVE_STATUSES: IncidentStatus[] = [
   "OPEN",
@@ -36,7 +46,7 @@ const ALLOWED_TRANSITIONS: Record<IncidentStatus, readonly IncidentStatus[]> = {
 
 export interface TransitionOptions {
   from: IncidentStatus | IncidentStatus[];
-  data?: Prisma.IncidentUpdateManyMutationInput;
+  data?: Record<string, unknown>;
 }
 
 export class InvalidIncidentTransitionError extends Error {
@@ -99,7 +109,7 @@ export async function transitionIncident(
     data: {
       status: to,
       ...(options.data ?? {}),
-    },
+    } as any,
   });
 
   if (updated.count === 1) {
