@@ -116,9 +116,14 @@ const server = Bun.serve({
             ? body as { decidedBy?: unknown; reason?: unknown }
             : {};
 
+        const incidentId = approvalMatch[1];
+        if (!incidentId) {
+          return json({ error: "missing incident id" }, 400);
+        }
+
         const decision = approvalMatch[2] === "approve" ? "approved" : "rejected";
         const result = await resumeIncident(
-          approvalMatch[1],
+          incidentId,
           decision,
           typeof payload.decidedBy === "string" && payload.decidedBy.trim()
             ? payload.decidedBy.trim()
