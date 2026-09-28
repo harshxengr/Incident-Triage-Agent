@@ -4,7 +4,14 @@ import { GROUPS, STREAMS } from "../streams/topics";
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_WAIT_MS = 5 * 60 * 1000; // 5 min safety cap, in case something is genuinely stuck
-const ACTIVE_STATUSES = ["OPEN", "DIAGNOSING"] as const;
+const ACTIVE_STATUSES = [
+    "OPEN",
+    "DIAGNOSING",
+    "DIAGNOSED",
+    "ACTION_PROPOSED",
+    "APPROVED",
+    "EXECUTING",
+] as const;
 
 const STREAM_GROUPS = [
     [STREAMS.NEW, GROUPS.LOG_ANALYZER],
