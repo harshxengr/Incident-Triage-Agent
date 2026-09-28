@@ -1,4 +1,4 @@
-import { Prisma } from "../../generated/prisma/client";
+import type { Prisma } from "../../generated/prisma/client";
 import { prisma } from "../db/client";
 
 export type IncidentStatus = Prisma.IncidentStatus;
@@ -86,7 +86,7 @@ export async function transitionIncident(
   const from = Array.isArray(options.from) ? options.from : [options.from];
 
   for (const source of from) {
-    if (source === to || !canTransition(source, to)) {
+    if (source !== to && !canTransition(source, to)) {
       throw new InvalidIncidentTransitionError(incidentId, source, to);
     }
   }
