@@ -209,6 +209,14 @@ const server = Bun.serve({
             scenarioType: true,
             createdAt: true,
             resolvedAt: true,
+            approvedAt: true,
+            approvedBy: true,
+            rejectedAt: true,
+            rejectedBy: true,
+            rejectionReason: true,
+            executionStartedAt: true,
+            executionCompletedAt: true,
+            failureReason: true,
             actions: {
               orderBy: { createdAt: "asc" },
               select: {
