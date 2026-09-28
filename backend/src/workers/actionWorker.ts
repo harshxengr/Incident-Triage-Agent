@@ -8,6 +8,7 @@ import { runWorker } from "../streams/runWorker";
 import { STREAMS, GROUPS } from "../streams/topics";
 import { markIncidentDeadLettered } from "./deadLetterIncident";
 import { SimulatedActionExecutor } from "../execution/actionExecutor";
+import { transitionIncident } from "../incidents/lifecycle";
 
 const executor = new SimulatedActionExecutor();
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
@@ -32,10 +33,9 @@ runWorker(
 
     // Persist the decision before execution so the lifecycle always records
     // the moment the agent proposed an action.
-    await prisma.incident.update({
-      where: { id: incidentId },
+    await transitionIncident(incidentId, "ACTION_PROPOSED", {
+      from: "DIAGNOSED",
       data: {
-        status: "ACTION_PROPOSED",
         resolvedAt: null,
         failureReason: null,
         suspectedDeploymentId: diagnosis.suspectedDeploymentId,
@@ -43,31 +43,26 @@ runWorker(
     });
 
     if (!actionDecision.requiresHuman) {
-      await prisma.incident.update({
-        where: { id: incidentId },
-        data: {
-          status: "EXECUTING",
-          executionStartedAt: new Date(),
-        },
+      await transitionIncident(incidentId, "EXECUTING", {
+        from: "ACTION_PROPOSED",
+        data: { executionStartedAt: new Date() },
       });
 
       const execution = await executor.execute(actionDecision.action, actionDecision.target);
       actionDecision.execution = execution;
 
       const resolved = executionSucceeded(execution);
-      await prisma.incident.update({
-        where: { id: incidentId },
+      await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+        from: "EXECUTING",
         data: {
-          status: resolved ? "RESOLVED" : "FAILED",
           resolvedAt: resolved ? new Date() : null,
           executionCompletedAt: new Date(),
           failureReason: resolved ? null : execution.detail,
         },
       });
     } else {
-      await prisma.incident.update({
-        where: { id: incidentId },
-        data: { status: "PENDING_APPROVAL" },
+      await transitionIncident(incidentId, "PENDING_APPROVAL", {
+        from: "ACTION_PROPOSED",
       });
     }
 
