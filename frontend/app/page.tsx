@@ -219,6 +219,8 @@ export default function Dashboard() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [demoCooldown, setDemoCooldown] = useState(0);
+  const [demoMessage, setDemoMessage] = useState<string | null>(null);
   const [busyIncidentId, setBusyIncidentId] = useState<string | null>(null);
 
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
@@ -382,19 +384,60 @@ export default function Dashboard() {
     return () => ws.close();
   }, [selectedIncidentId]);
 
+  useEffect(() => {
+    if (demoCooldown <= 0) return;
+
+    const timer = window.setInterval(() => {
+      setDemoCooldown((seconds) => Math.max(0, seconds - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [demoCooldown]);
+
   async function handleTriggerDemo() {
+    if (triggering || demoCooldown > 0) return;
+
     setTriggering(true);
+    setDemoMessage(null);
+
     try {
       const response = await fetch(`${API_BASE}/demo/trigger`, {
         method: "POST",
       });
+
+      if (response.status === 429) {
+        const body = await response.json().catch(() => null) as
+          | { retryAfterSeconds?: number; error?: string }
+          | null;
+        const retryAfter =
+          typeof body?.retryAfterSeconds === "number"
+            ? body.retryAfterSeconds
+            : Number(response.headers.get("Retry-After") ?? 30);
+
+        setDemoCooldown(Math.max(1, retryAfter));
+        setDemoMessage(`Demo trigger is rate-limited. Try again in ${Math.max(1, retryAfter)}s.`);
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(`Demo request failed: ${response.status}`);
       }
+
+      const body = await response.json().catch(() => null) as
+        | { id?: string }
+        | null;
+
+      setDemoCooldown(30);
+      setDemoMessage(
+        body?.id
+          ? `Demo incident created: ${body.id.slice(0, 8)}`
+          : "Demo incident created.",
+      );
     } catch (err) {
       console.error("Failed to trigger demo:", err);
+      setDemoMessage(err instanceof Error ? err.message : "Failed to trigger demo.");
     } finally {
-      setTimeout(() => setTriggering(false), 3000);
+      setTriggering(false);
     }
   }
 
@@ -411,17 +454,26 @@ export default function Dashboard() {
 
       <button
         onClick={handleTriggerDemo}
-        disabled={triggering}
+        disabled={triggering || demoCooldown > 0}
         style={{
-          marginBottom: 24,
+          marginBottom: 8,
           padding: "8px 16px",
           fontFamily: "monospace",
-          cursor: triggering ? "not-allowed" : "pointer",
-          opacity: triggering ? 0.5 : 1,
+          cursor: triggering || demoCooldown > 0 ? "not-allowed" : "pointer",
+          opacity: triggering || demoCooldown > 0 ? 0.5 : 1,
         }}
       >
-        {triggering ? "Triggering..." : "▶ Trigger a Live Demo Incident"}
+        {triggering
+          ? "Triggering..."
+          : demoCooldown > 0
+            ? `▶ Trigger Demo (${demoCooldown}s)`
+            : "▶ Trigger a Live Demo Incident"}
       </button>
+      {demoMessage && (
+        <div style={{ marginBottom: 24, fontSize: 12, color: "#666" }}>
+          {demoMessage}
+        </div>
+      )}
 
       <p style={{ color: connected ? "green" : "red", marginBottom: 24 }}>
         {connected ? "● live" : "○ disconnected"}
