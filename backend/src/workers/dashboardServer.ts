@@ -7,7 +7,7 @@ import { validateIncidentPayload, validateDeploymentPayload } from "../webhooks/
 import { parseSlackInteractionBody } from "../webhooks/slackInteraction";
 import { STREAMS } from "../streams/topics";
 import { resumeIncident } from "../agents/resume";
-import { SlackNotifier } from "../notifier/client";
+import { ConsoleNotifier, SlackNotifier } from "../notifier/client";
 import { triggerDemoIncident } from "../streams/triggerDemoIncident";
 
 class RateLimiter {
@@ -42,7 +42,7 @@ const PORT = Number(process.env.PORT ?? process.env.DASHBOARD_PORT ?? 3002);
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
 };
 
 function json(data: unknown, status = 200): Response {
@@ -101,6 +101,35 @@ const server = Bun.serve({
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
+      const approvalMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/(approve|reject)$/);
+      if (approvalMatch && req.method === "POST") {
+        const dashboardOperatorKey =
+          process.env.DASHBOARD_OPERATOR_KEY ?? process.env.WEBHOOK_API_KEY ?? "";
+
+        if (!dashboardOperatorKey || !checkApiKey(req, dashboardOperatorKey)) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        const body = await readJson(req);
+        const payload =
+          typeof body === "object" && body !== null
+            ? body as { decidedBy?: unknown; reason?: unknown }
+            : {};
+
+        const decision = approvalMatch[2] === "approve" ? "approved" : "rejected";
+        const result = await resumeIncident(
+          approvalMatch[1],
+          decision,
+          typeof payload.decidedBy === "string" && payload.decidedBy.trim()
+            ? payload.decidedBy.trim()
+            : "dashboard-operator",
+          new ConsoleNotifier(),
+          typeof payload.reason === "string" ? payload.reason : undefined,
+        );
+
+        return json(result, result.ok ? 200 : 409);
+      }
+
       if (url.pathname === "/webhook/incident" && req.method === "POST") {
         if (!checkApiKey(req, process.env.WEBHOOK_API_KEY!)) {
           return json({ error: "unauthorized" }, 401);
@@ -113,8 +142,6 @@ const server = Bun.serve({
           data: {
             ...validation.data,
             status: "OPEN",
-            // real incidents have no synthetic ground truth - these fields exist
-            // for the eval harness on generated data, not on real ingested ones.
             expectedDiagnosis: "N/A - real incident",
             expectedAction: "N/A - real incident",
             expectedRequiresHuman: false,
@@ -158,14 +185,14 @@ const server = Bun.serve({
         const parsed = parseSlackInteractionBody(rawBody);
         if (!parsed.ok) {
           console.error("Could not parse Slack interaction:", parsed.error);
-          return new Response("", { status: 200 }); // ack anyway so Slack doesn't retry a request we'll never understand
+          return new Response("", { status: 200 });
         }
 
         const decision = parsed.data.actionId === "approve_incident" ? "approved" : "rejected";
         const notifier = new SlackNotifier(process.env.SLACK_WEBHOOK_URL!);
         await resumeIncident(parsed.data.incidentId, decision, parsed.data.slackUsername, notifier);
 
-        return new Response("", { status: 200 }); // Slack expects a fast 200, not a JSON body
+        return new Response("", { status: 200 });
       }
 
       if (url.pathname === "/api/incidents" && req.method === "GET") {
@@ -181,9 +208,28 @@ const server = Bun.serve({
             scenarioType: true,
             createdAt: true,
             resolvedAt: true,
+            actions: {
+              where: { agentType: "ACTION" },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                output: true,
+                reasoning: true,
+                confidence: true,
+              },
+            },
           },
         });
-        return json(incidents);
+
+        return json(
+          incidents.map((incident) => ({
+            ...incident,
+            proposedAction: incident.actions[0]?.output ?? null,
+            actionReasoning: incident.actions[0]?.reasoning ?? null,
+            actionConfidence: incident.actions[0]?.confidence ?? null,
+            actions: undefined,
+          })),
+        );
       }
 
       const incidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)$/);
@@ -198,9 +244,6 @@ const server = Bun.serve({
 
       return new Response("Not found", { status: 404 });
     } catch (err) {
-      // ab koi bhi unexpected crash bhi CORS headers ke saath, clear
-      // JSON error ke roop mein aayega - "CORS blocked" wala confusing
-      // false-signal kabhi nahi dikhega, asli error seedha dikhega
       console.error("Unhandled error in dashboard server:", err);
       return json({ error: "internal server error", detail: String(err) }, 500);
     }
@@ -218,10 +261,6 @@ const server = Bun.serve({
 
 console.log(`Dashboard server: http://localhost:${PORT}  (WS at /ws)`);
 
-// bridge: redis pub/sub -> this server's websocket topic. dedicated
-// connection since subscribe() holds the connection open indefinitely -
-// same reasoning as blocking stream reads needing their own connection,
-// found the hard way back in Phase 3.
 const redisSub = createStreamClient();
 await redisSub.subscribe("agent-events", (message: string) => {
   server.publish("agent-events", message);
