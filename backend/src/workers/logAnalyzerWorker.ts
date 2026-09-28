@@ -6,6 +6,7 @@ import { xadd } from "../streams/client";
 import { runWorker } from "../streams/runWorker";
 import { STREAMS, GROUPS } from "../streams/topics";
 import { markIncidentDeadLettered } from "./deadLetterIncident";
+import { transitionIncident } from "../incidents/lifecycle";
 
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
 
@@ -39,7 +40,9 @@ runWorker(
       return;
     }
 
-    await prisma.incident.update({ where: { id: incidentId }, data: { status: "DIAGNOSING" } });
+    await transitionIncident(incidentId, "DIAGNOSING", {
+      from: ["OPEN", "DIAGNOSING"],
+    });
 
     const logAnalysis = await analyzeLog(llm, incident.rawLog);
     await logAction({
