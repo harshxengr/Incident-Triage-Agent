@@ -3,6 +3,7 @@ import { logAction } from "../db/logAction";
 import type { Notifier } from "../notifier/client";
 import { createStreamClient } from "../streams/client";
 import { SimulatedActionExecutor } from "../execution/actionExecutor";
+import { transitionIncident } from "../incidents/lifecycle";
 
 export type ResumeDecision = "approved" | "rejected";
 
@@ -28,26 +29,28 @@ export async function resumeIncident(
     }
 
     const now = new Date();
-    const updated = await prisma.incident.updateMany({
-        where: { id: incidentId, status: "PENDING_APPROVAL" },
-        data:
-            decision === "approved"
-                ? {
-                    status: "APPROVED",
+    try {
+        if (decision === "approved") {
+            await transitionIncident(incidentId, "APPROVED", {
+                from: "PENDING_APPROVAL",
+                data: {
                     approvedAt: now,
                     approvedBy: decidedBy,
                     failureReason: null,
-                }
-                : {
-                    status: "REJECTED",
+                },
+            });
+        } else {
+            await transitionIncident(incidentId, "REJECTED", {
+                from: "PENDING_APPROVAL",
+                data: {
                     rejectedAt: now,
                     rejectedBy: decidedBy,
                     rejectionReason: rejectionReason ?? null,
                     resolvedAt: now,
                 },
-    });
-
-    if (updated.count === 0) {
+            });
+        }
+    } catch (error) {
         const existing = await prisma.incident.findUnique({
             where: { id: incidentId },
             select: { status: true },
@@ -55,21 +58,19 @@ export async function resumeIncident(
 
         return {
             ok: false,
-            reason: existing
-                ? `Incident exists but its status is "${existing.status}", not PENDING_APPROVAL.`
-                : `No incident found with id "${incidentId}".`,
+            reason:
+                existing
+                    ? `Incident exists but its status is "${existing.status}", not PENDING_APPROVAL.`
+                    : `No incident found with id "${incidentId}".`,
         };
     }
 
     let execution: import("../execution/actionExecutor").ExecutionResult | undefined;
 
     if (decision === "approved") {
-        await prisma.incident.update({
-            where: { id: incidentId },
-            data: {
-                status: "EXECUTING",
-                executionStartedAt: new Date(),
-            },
+        await transitionIncident(incidentId, "EXECUTING", {
+            from: "APPROVED",
+            data: { executionStartedAt: new Date() },
         });
 
         const executor = new SimulatedActionExecutor();
@@ -77,10 +78,9 @@ export async function resumeIncident(
         execution = await executor.execute(proposedAction.action as any, proposedAction.target);
 
         const resolved = execution.executed === true;
-        await prisma.incident.update({
-            where: { id: incidentId },
+        await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+            from: "EXECUTING",
             data: {
-                status: resolved ? "RESOLVED" : "FAILED",
                 resolvedAt: resolved ? new Date() : null,
                 executionCompletedAt: new Date(),
                 failureReason: resolved ? null : execution.detail,
