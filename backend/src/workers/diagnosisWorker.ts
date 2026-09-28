@@ -42,6 +42,14 @@ runWorker(
     }));
 
     const diagnosis = await diagnose(llm, logAnalysis, candidates);
+    await prisma.incident.update({
+      where: { id: incidentId },
+      data: {
+        status: "DIAGNOSED",
+        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+      },
+    });
+
     await logAction({
       incidentId,
       agentType: "DIAGNOSIS",
