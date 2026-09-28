@@ -3,7 +3,16 @@
 import { useEffect, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3002";
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:3002/ws";
+
+function getWebSocketUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_WS_URL?.trim();
+  if (configured) return configured;
+
+  // Derive the public WebSocket URL from the same API origin.
+  // https://... -> wss://...
+  // http://...  -> ws://...
+  return `${API_BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:").replace(/\/$/, "")}/ws`;
+}
 const OPERATOR_KEY_STORAGE = "incident-triage-dashboard-operator-key";
 
 interface ProposedAction {
@@ -348,40 +357,118 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
+    let ws: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let keepaliveTimer: number | null = null;
+    let reconnectDelay = 1000;
+    let disposed = false;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (e) => {
-      let event: AgentEvent;
-      try {
-        event = JSON.parse(e.data);
-      } catch {
-        return;
+    const cleanupTimers = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
-      if (
-        typeof event.incidentId !== "string" ||
-        typeof event.agentType !== "string"
-      ) {
-        return;
-      }
-
-      setEvents((prev) => [event, ...prev].slice(0, 100));
-
-      fetchIncidents()
-        .then(setIncidents)
-        .catch((err) =>
-          console.error("failed to refresh incidents:", err),
-        );
-
-      if (selectedIncidentId === event.incidentId) {
-        fetchHistory(event.incidentId)
-          .then(setSelectedHistory)
-          .catch((err) => console.error("failed to refresh history:", err));
+      if (keepaliveTimer !== null) {
+        window.clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
       }
     };
 
-    return () => ws.close();
+    const connect = () => {
+      if (disposed) return;
+
+      const wsUrl = getWebSocketUrl();
+      console.info("[dashboard] connecting WebSocket:", wsUrl);
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        if (disposed) {
+          ws?.close();
+          return;
+        }
+
+        console.info("[dashboard] WebSocket connected");
+        setConnected(true);
+        reconnectDelay = 1000;
+
+        cleanupTimers();
+
+        // Send periodic inbound messages so the connection stays active on
+        // Render free services and so stale connections are detected.
+        keepaliveTimer = window.setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send("ping");
+          }
+        }, 25_000);
+      };
+
+      ws.onmessage = (e) => {
+        if (typeof e.data !== "string") return;
+
+        if (e.data === "pong") return;
+
+        let event: AgentEvent;
+        try {
+          event = JSON.parse(e.data);
+        } catch {
+          return;
+        }
+
+        if (
+          typeof event.incidentId !== "string" ||
+          typeof event.agentType !== "string"
+        ) {
+          return;
+        }
+
+        setEvents((prev) => [event, ...prev].slice(0, 100));
+
+        fetchIncidents()
+          .then(setIncidents)
+          .catch((err) =>
+            console.error("failed to refresh incidents:", err),
+          );
+
+        if (selectedIncidentId === event.incidentId) {
+          fetchHistory(event.incidentId)
+            .then(setSelectedHistory)
+            .catch((err) =>
+              console.error("failed to refresh history:", err),
+            );
+        }
+      };
+
+      ws.onerror = (event) => {
+        console.error("[dashboard] WebSocket error:", event);
+      };
+
+      ws.onclose = () => {
+        setConnected(false);
+        cleanupTimers();
+
+        if (disposed) return;
+
+        console.warn(
+          `[dashboard] WebSocket disconnected; reconnecting in ${reconnectDelay}ms`,
+        );
+
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, reconnectDelay);
+
+        reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      cleanupTimers();
+      ws?.close();
+    };
   }, [selectedIncidentId]);
 
   useEffect(() => {
