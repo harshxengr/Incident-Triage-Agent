@@ -22,12 +22,26 @@ interface ProposedAction {
 interface Incident {
   id: string;
   title: string;
+  rawLog: string;
   service: string;
   severity: string;
   status: string;
   scenarioType: string;
   createdAt: string;
   resolvedAt: string | null;
+  logAnalysis: {
+    errorCount: number | null;
+    timeWindowMinutes: number | null;
+    affectedLocation: string | null;
+    pattern: string;
+  } | null;
+  diagnosis: {
+    diagnosis: string;
+    suspectedDeploymentId: string | null;
+    confidence: number;
+  } | null;
+  diagnosisReasoning: string | null;
+  diagnosisConfidence: number | null;
   proposedAction: ProposedAction | null;
   actionReasoning: string | null;
   actionConfidence: number | null;
@@ -222,40 +236,115 @@ export default function Dashboard() {
                   <td style={{ padding: "8px 6px" }}><StatusBadge status={inc.status} /></td>
                   <td style={{ padding: "8px 6px" }}>
                     {inc.status === "PENDING_APPROVAL" ? (
-                      <div>
-                        <div style={{ marginBottom: 8, fontSize: 12 }}>
-                          <strong>{inc.proposedAction?.action ?? "human review required"}</strong>
-                          {inc.proposedAction?.target ? ` → ${inc.proposedAction.target}` : ""}
+                      <div style={{
+                        minWidth: 0,
+                        border: "1px solid #e0a800",
+                        padding: 10,
+                        background: "#fffdf5",
+                      }}>
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ fontSize: 11, color: "#8a6d00", fontWeight: "bold" }}>
+                            HUMAN APPROVAL REQUIRED
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 13 }}>
+                            <strong>{inc.proposedAction?.action ?? "Unknown action"}</strong>
+                            {inc.proposedAction?.target ? ` → ${inc.proposedAction.target}` : ""}
+                          </div>
                         </div>
-                        {inc.actionReasoning && (
-                          <div style={{ color: "#666", fontSize: 11, marginBottom: 8 }}>
-                            {inc.actionReasoning}
+
+                        <div style={{ fontSize: 11, marginBottom: 8 }}>
+                          <strong>Why:</strong>{" "}
+                          {inc.actionReasoning ?? "The agent classified this action as requiring human approval."}
+                        </div>
+
+                        {inc.proposedAction?.confidence != null && (
+                          <div style={{ fontSize: 11, marginBottom: 8 }}>
+                            <strong>Action confidence:</strong>{" "}
+                            {(inc.proposedAction.confidence * 100).toFixed(0)}%
                           </div>
                         )}
+
+                        {inc.diagnosis && (
+                          <details style={{ marginBottom: 8 }}>
+                            <summary style={{ cursor: "pointer", fontWeight: "bold", fontSize: 11 }}>
+                              View diagnosis evidence
+                            </summary>
+                            <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.4 }}>
+                              <div><strong>Diagnosis:</strong> {inc.diagnosis.diagnosis}</div>
+                              <div>
+                                <strong>Suspected deployment:</strong>{" "}
+                                {inc.diagnosis.suspectedDeploymentId ?? "None"}
+                              </div>
+                              <div>
+                                <strong>Diagnosis confidence:</strong>{" "}
+                                {(inc.diagnosis.confidence * 100).toFixed(0)}%
+                              </div>
+                              {inc.diagnosisReasoning && (
+                                <div style={{ marginTop: 4 }}>
+                                  <strong>Reasoning:</strong> {inc.diagnosisReasoning}
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        )}
+
+                        {inc.logAnalysis && (
+                          <details style={{ marginBottom: 8 }}>
+                            <summary style={{ cursor: "pointer", fontWeight: "bold", fontSize: 11 }}>
+                              View log analysis
+                            </summary>
+                            <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.4 }}>
+                              <div><strong>Pattern:</strong> {inc.logAnalysis.pattern}</div>
+                              <div><strong>Error count:</strong> {inc.logAnalysis.errorCount ?? "unknown"}</div>
+                              <div><strong>Window:</strong> {inc.logAnalysis.timeWindowMinutes ?? "unknown"} min</div>
+                              <div><strong>Location:</strong> {inc.logAnalysis.affectedLocation ?? "unknown"}</div>
+                            </div>
+                          </details>
+                        )}
+
+                        <details style={{ marginBottom: 10 }}>
+                          <summary style={{ cursor: "pointer", fontWeight: "bold", fontSize: 11 }}>
+                            View raw incident log
+                          </summary>
+                          <pre style={{
+                            marginTop: 6,
+                            padding: 8,
+                            maxHeight: 160,
+                            overflow: "auto",
+                            whiteSpace: "pre-wrap",
+                            background: "#f7f7f7",
+                            fontSize: 10,
+                          }}>
+                            {inc.rawLog}
+                          </pre>
+                        </details>
+
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                           <button
                             onClick={() => handleDecision(inc, "approve")}
                             disabled={busyIncidentId === inc.id}
                             style={{
-                              padding: "6px 10px",
+                              padding: "7px 12px",
                               fontFamily: "monospace",
                               cursor: busyIncidentId === inc.id ? "not-allowed" : "pointer",
                               border: "1px solid #2f855a",
+                              fontWeight: "bold",
                             }}
                           >
-                            {busyIncidentId === inc.id ? "Processing..." : "✓ Approve"}
+                            {busyIncidentId === inc.id ? "Processing..." : "✓ Approve action"}
                           </button>
                           <button
                             onClick={() => handleDecision(inc, "reject")}
                             disabled={busyIncidentId === inc.id}
                             style={{
-                              padding: "6px 10px",
+                              padding: "7px 12px",
                               fontFamily: "monospace",
                               cursor: busyIncidentId === inc.id ? "not-allowed" : "pointer",
                               border: "1px solid #c53030",
+                              fontWeight: "bold",
                             }}
                           >
-                            ✕ Reject
+                            ✕ Reject action
                           </button>
                         </div>
                       </div>
