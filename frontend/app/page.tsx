@@ -1018,19 +1018,19 @@ export default function Dashboard() {
                                   <strong>Decision:</strong>{" "}
                                   {String(decision ?? "recorded")}
                                 </div>
-                                {input?.decidedBy && (
+                                {typeof input?.decidedBy === "string" && (
                                   <div>
                                     <strong>Decided by:</strong>{" "}
-                                    {String(input.decidedBy)}
+                                    {input.decidedBy}
                                   </div>
                                 )}
-                                {input?.rejectionReason && (
+                                {typeof input?.rejectionReason === "string" && (
                                   <div>
                                     <strong>Reason:</strong>{" "}
-                                    {String(input.rejectionReason)}
+                                    {input.rejectionReason}
                                   </div>
                                 )}
-                                {output?.execution && (
+                                {output?.execution != null && (
                                   <div style={{ marginTop: 4 }}>
                                     <strong>Execution:</strong>
                                     <pre
