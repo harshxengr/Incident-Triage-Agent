@@ -366,7 +366,11 @@ const server = Bun.serve({
     open(ws) {
       ws.subscribe("agent-events");
     },
-    message() { },
+    message(ws, message) {
+      if (typeof message === "string" && message === "ping") {
+        ws.send("pong");
+      }
+    },
     close(ws) {
       ws.unsubscribe("agent-events");
     },
