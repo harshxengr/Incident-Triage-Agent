@@ -12,7 +12,10 @@ export async function markIncidentDeadLettered(
 
   await prisma.incident.update({
     where: { id: incidentId },
-    data: { status: "FAILED" },
+    data: {
+      status: "FAILED",
+      failureReason: failure.error,
+    },
   });
 
   await client.publish(
