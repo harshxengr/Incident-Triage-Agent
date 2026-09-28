@@ -202,6 +202,7 @@ const server = Bun.serve({
           select: {
             id: true,
             title: true,
+            rawLog: true,
             service: true,
             severity: true,
             status: true,
@@ -209,26 +210,47 @@ const server = Bun.serve({
             createdAt: true,
             resolvedAt: true,
             actions: {
-              where: { agentType: "ACTION" },
-              orderBy: { createdAt: "desc" },
-              take: 1,
+              orderBy: { createdAt: "asc" },
               select: {
+                agentType: true,
                 output: true,
                 reasoning: true,
                 confidence: true,
+                createdAt: true,
               },
             },
           },
         });
 
         return json(
-          incidents.map((incident) => ({
-            ...incident,
-            proposedAction: incident.actions[0]?.output ?? null,
-            actionReasoning: incident.actions[0]?.reasoning ?? null,
-            actionConfidence: incident.actions[0]?.confidence ?? null,
-            actions: undefined,
-          })),
+          incidents.map((incident) => {
+            const latest = (agentType: string) =>
+              [...incident.actions].reverse().find((action) => action.agentType === agentType) ?? null;
+
+            const logAnalysis = latest("LOG_ANALYZER");
+            const diagnosis = latest("DIAGNOSIS");
+            const action = latest("ACTION");
+
+            return {
+              id: incident.id,
+              title: incident.title,
+              rawLog: incident.rawLog,
+              service: incident.service,
+              severity: incident.severity,
+              status: incident.status,
+              scenarioType: incident.scenarioType,
+              createdAt: incident.createdAt,
+              resolvedAt: incident.resolvedAt,
+              logAnalysis: logAnalysis?.output ?? null,
+              diagnosis: diagnosis?.output ?? null,
+              diagnosisReasoning: diagnosis?.reasoning ?? null,
+              diagnosisConfidence: diagnosis?.confidence ?? null,
+              proposedAction: action?.output ?? null,
+              actionReasoning: action?.reasoning ?? null,
+              actionConfidence: action?.confidence ?? null,
+              actions: undefined,
+            };
+          }),
         );
       }
 
