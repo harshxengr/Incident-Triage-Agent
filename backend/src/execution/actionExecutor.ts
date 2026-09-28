@@ -2,6 +2,7 @@ import type { ActionName } from "../agents/types";
 
 export interface ExecutionResult {
   executed: boolean;
+  simulated?: boolean;
   detail: string;
 }
 
@@ -9,14 +10,14 @@ export interface ActionExecutor {
   execute(action: ActionName, target: string | null): Promise<ExecutionResult>;
 }
 
-// Default - touches nothing real, just logs. This is what the whole
-// project has run on so far. Keep using this until you deliberately wire
-// a real executor below.
+// Default - touches nothing real, but reports a successful simulation so the
+// incident lifecycle can reach RESOLVED without pretending production changed.
+// The execution result explicitly says it was simulated.
 export class SimulatedActionExecutor implements ActionExecutor {
   async execute(action: ActionName, target: string | null): Promise<ExecutionResult> {
     const detail = `[simulated] would run ${action}(${target ?? ""})`;
     console.log(detail);
-    return { executed: false, detail };
+    return { executed: true, simulated: true, detail };
   }
 }
 
@@ -27,8 +28,7 @@ export class SimulatedActionExecutor implements ActionExecutor {
 //    Railway service IDs (from the dashboard, or `railway status --json`).
 // 2. rollbackDeployment is NOT implemented - Railway does expose a rollback
 //    mutation, but verify its exact name/arguments in your own account's
-//    GraphiQL explorer (https://backboard.railway.com/graphql/v2) before
-//    wiring in something that changes production infra.
+//    GraphiQL explorer before wiring in something that changes production infra.
 export class RailwayActionExecutor implements ActionExecutor {
   private readonly endpoint = "https://backboard.railway.com/graphql/v2";
 
@@ -43,21 +43,22 @@ export class RailwayActionExecutor implements ActionExecutor {
     if (action === "restartService") return this.restartService(target);
     return {
       executed: false,
+      simulated: false,
       detail: `RailwayActionExecutor has no real implementation for "${action}" yet.`,
     };
   }
 
   private async restartService(serviceName: string | null): Promise<ExecutionResult> {
-    if (!serviceName) return { executed: false, detail: "restartService called with no target" };
+    if (!serviceName) return { executed: false, simulated: false, detail: "restartService called with no target" };
 
     const serviceId = this.SERVICE_ID_MAP[serviceName];
     if (!serviceId) {
-      return { executed: false, detail: `No Railway service ID configured for "${serviceName}".` };
+      return { executed: false, simulated: false, detail: `No Railway service ID configured for "${serviceName}".` };
     }
 
     const deploymentId = await this.getCurrentDeploymentId(serviceId);
     if (!deploymentId) {
-      return { executed: false, detail: `Could not find a current deployment for service ${serviceId}` };
+      return { executed: false, simulated: false, detail: `Could not find a current deployment for service ${serviceId}` };
     }
 
     const result = await this.graphql(
@@ -67,6 +68,7 @@ export class RailwayActionExecutor implements ActionExecutor {
 
     return {
       executed: true,
+      simulated: false,
       detail: `Restarted deployment ${deploymentId} for ${serviceName}. Railway response: ${JSON.stringify(result)}`,
     };
   }
