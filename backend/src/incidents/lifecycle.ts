@@ -36,7 +36,7 @@ const ALLOWED_TRANSITIONS: Record<IncidentStatus, readonly IncidentStatus[]> = {
 
 export interface TransitionOptions {
   from: IncidentStatus | IncidentStatus[];
-  data?: Record<string, unknown>;
+  data?: Prisma.IncidentUpdateManyMutationInput;
 }
 
 export class InvalidIncidentTransitionError extends Error {
