@@ -1,6 +1,7 @@
 import type { RedisClient } from "bun";
 import { prisma } from "../db/client";
 import type { DeadLetterFailure } from "../streams/runWorker";
+import { transitionIncident } from "../incidents/lifecycle";
 
 export async function markIncidentDeadLettered(
   fields: Record<string, string>,
@@ -10,13 +11,25 @@ export async function markIncidentDeadLettered(
   const incidentId = fields.incidentId;
   if (!incidentId) return;
 
-  await prisma.incident.update({
-    where: { id: incidentId },
-    data: {
-      status: "FAILED",
-      failureReason: failure.error,
-    },
-  });
+  const activeStates = [
+    "OPEN",
+    "DIAGNOSING",
+    "DIAGNOSED",
+    "ACTION_PROPOSED",
+    "PENDING_APPROVAL",
+    "APPROVED",
+    "EXECUTING",
+  ] as const;
+
+  try {
+    await transitionIncident(incidentId, "FAILED", {
+      from: [...activeStates],
+      data: { failureReason: failure.error },
+    });
+  } catch {
+    // If another worker already moved the incident to a terminal state,
+    // retain that final state and keep the dead-letter event as the audit record.
+  }
 
   await client.publish(
     "agent-events",
