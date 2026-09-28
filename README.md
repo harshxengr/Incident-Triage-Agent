@@ -30,6 +30,30 @@ flowchart TD
     APPROVAL -->|approve/reject| DB
 \`\`\`
 
+## Incident Lifecycle
+
+Every incident now has an explicit persisted lifecycle in PostgreSQL rather than relying only on audit events:
+
+```
+OPEN
+  ↓
+DIAGNOSING
+  ↓
+DIAGNOSED
+  ↓
+ACTION_PROPOSED
+  ├── low-risk ──→ EXECUTING ──→ RESOLVED / FAILED
+  │
+  └── high-risk → PENDING_APPROVAL
+                         ├──→ APPROVED ──→ EXECUTING ──→ RESOLVED / FAILED
+                         └──→ REJECTED
+```
+
+Approval metadata and execution timestamps are stored on the incident, while `AgentAction` remains the detailed audit trail for agent decisions and human decisions.
+
+Status changes are enforced through a single transition module. Each worker performs a compare-and-set update against the expected current status, so stale retries and concurrent approval requests cannot silently move an incident to an invalid state. Terminal states (`RESOLVED`, `REJECTED`, `FAILED`, `FALSE_POSITIVE`) cannot transition again.
+
+
 ## Why This Architecture
 
 - **Redis Streams for agent-to-agent handoff** (not direct function calls): each agent

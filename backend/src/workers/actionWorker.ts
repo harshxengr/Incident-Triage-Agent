@@ -8,6 +8,7 @@ import { runWorker } from "../streams/runWorker";
 import { STREAMS, GROUPS } from "../streams/topics";
 import { markIncidentDeadLettered } from "./deadLetterIncident";
 import { SimulatedActionExecutor } from "../execution/actionExecutor";
+import { transitionIncident } from "../incidents/lifecycle";
 
 const executor = new SimulatedActionExecutor();
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
@@ -30,9 +31,39 @@ runWorker(
 
     const actionDecision = await decideAction(llm, diagnosis);
 
+    // Persist the decision before execution so the lifecycle always records
+    // the moment the agent proposed an action.
+    await transitionIncident(incidentId, "ACTION_PROPOSED", {
+      from: "DIAGNOSED",
+      data: {
+        resolvedAt: null,
+        failureReason: null,
+        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+      },
+    });
+
     if (!actionDecision.requiresHuman) {
+      await transitionIncident(incidentId, "EXECUTING", {
+        from: "ACTION_PROPOSED",
+        data: { executionStartedAt: new Date() },
+      });
+
       const execution = await executor.execute(actionDecision.action, actionDecision.target);
       actionDecision.execution = execution;
+
+      const resolved = executionSucceeded(execution);
+      await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+        from: "EXECUTING",
+        data: {
+          resolvedAt: resolved ? new Date() : null,
+          executionCompletedAt: new Date(),
+          failureReason: resolved ? null : execution.detail,
+        },
+      });
+    } else {
+      await transitionIncident(incidentId, "PENDING_APPROVAL", {
+        from: "ACTION_PROPOSED",
+      });
     }
 
     await logAction({
@@ -43,22 +74,6 @@ runWorker(
       reasoning: actionDecision.reasoning,
       confidence: actionDecision.confidence,
       broadcast: client,
-    });
-
-    await prisma.incident.update({
-      where: { id: incidentId },
-      data: {
-        status: actionDecision.requiresHuman
-          ? "PENDING_APPROVAL"
-          : executionSucceeded(actionDecision.execution)
-            ? "RESOLVED"
-            : "FAILED",
-        resolvedAt:
-          !actionDecision.requiresHuman && executionSucceeded(actionDecision.execution)
-            ? new Date()
-            : null,
-        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
-      },
     });
 
     await xadd(client, STREAMS.ACTION_DECIDED, { incidentId });

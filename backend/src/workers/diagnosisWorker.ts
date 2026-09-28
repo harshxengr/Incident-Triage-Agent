@@ -8,6 +8,7 @@ import { xadd } from "../streams/client";
 import { runWorker } from "../streams/runWorker";
 import { STREAMS, GROUPS } from "../streams/topics";
 import { markIncidentDeadLettered } from "./deadLetterIncident";
+import { transitionIncident } from "../incidents/lifecycle";
 
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
 
@@ -42,6 +43,13 @@ runWorker(
     }));
 
     const diagnosis = await diagnose(llm, logAnalysis, candidates);
+    await transitionIncident(incidentId, "DIAGNOSED", {
+      from: "DIAGNOSING",
+      data: {
+        suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+      },
+    });
+
     await logAction({
       incidentId,
       agentType: "DIAGNOSIS",

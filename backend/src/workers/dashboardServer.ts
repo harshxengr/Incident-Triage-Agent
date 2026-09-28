@@ -7,7 +7,7 @@ import { validateIncidentPayload, validateDeploymentPayload } from "../webhooks/
 import { parseSlackInteractionBody } from "../webhooks/slackInteraction";
 import { STREAMS } from "../streams/topics";
 import { resumeIncident } from "../agents/resume";
-import { SlackNotifier } from "../notifier/client";
+import { ConsoleNotifier, SlackNotifier } from "../notifier/client";
 import { triggerDemoIncident } from "../streams/triggerDemoIncident";
 
 class RateLimiter {
@@ -18,7 +18,7 @@ class RateLimiter {
     private readonly windowMs: number,
   ) { }
 
-  allows(key: string): boolean {
+  check(key: string): { allowed: boolean; retryAfterSeconds: number } {
     const now = Date.now();
     const recent = (this.requests.get(key) ?? []).filter(
       (timestamp) => now - timestamp < this.windowMs,
@@ -26,12 +26,17 @@ class RateLimiter {
 
     if (recent.length >= this.limit) {
       this.requests.set(key, recent);
-      return false;
+      const oldest = recent[0] ?? now;
+      const retryAfterMs = Math.max(0, this.windowMs - (now - oldest));
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000)),
+      };
     }
 
     recent.push(now);
     this.requests.set(key, recent);
-    return true;
+    return { allowed: true, retryAfterSeconds: 0 };
   }
 }
 
@@ -42,7 +47,7 @@ const PORT = Number(process.env.PORT ?? process.env.DASHBOARD_PORT ?? 3002);
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
 };
 
 function json(data: unknown, status = 200): Response {
@@ -82,8 +87,22 @@ const server = Bun.serve({
 
       if (url.pathname === "/demo/trigger" && req.method === "POST") {
         const clientIp = req.headers.get("x-forwarded-for") ?? "unknown";
-        if (!demoLimiter.allows(clientIp)) {
-          return json({ error: "Please wait a bit before triggering another demo incident." }, 429);
+        const rate = demoLimiter.check(clientIp);
+        if (!rate.allowed) {
+          return new Response(
+            JSON.stringify({
+              error: "Demo incident rate limit reached.",
+              retryAfterSeconds: rate.retryAfterSeconds,
+            }),
+            {
+              status: 429,
+              headers: {
+                ...CORS_HEADERS,
+                "Retry-After": String(rate.retryAfterSeconds),
+                "Content-Type": "application/json",
+              },
+            },
+          );
         }
 
         try {
@@ -101,6 +120,40 @@ const server = Bun.serve({
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
+      const approvalMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/(approve|reject)$/);
+      if (approvalMatch && req.method === "POST") {
+        const dashboardOperatorKey =
+          process.env.DASHBOARD_OPERATOR_KEY ?? process.env.WEBHOOK_API_KEY ?? "";
+
+        if (!dashboardOperatorKey || !checkApiKey(req, dashboardOperatorKey)) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        const body = await readJson(req);
+        const payload =
+          typeof body === "object" && body !== null
+            ? body as { decidedBy?: unknown; reason?: unknown }
+            : {};
+
+        const incidentId = approvalMatch[1];
+        if (!incidentId) {
+          return json({ error: "missing incident id" }, 400);
+        }
+
+        const decision = approvalMatch[2] === "approve" ? "approved" : "rejected";
+        const result = await resumeIncident(
+          incidentId,
+          decision,
+          typeof payload.decidedBy === "string" && payload.decidedBy.trim()
+            ? payload.decidedBy.trim()
+            : "dashboard-operator",
+          new ConsoleNotifier(),
+          typeof payload.reason === "string" ? payload.reason : undefined,
+        );
+
+        return json(result, result.ok ? 200 : 409);
+      }
+
       if (url.pathname === "/webhook/incident" && req.method === "POST") {
         if (!checkApiKey(req, process.env.WEBHOOK_API_KEY!)) {
           return json({ error: "unauthorized" }, 401);
@@ -113,8 +166,6 @@ const server = Bun.serve({
           data: {
             ...validation.data,
             status: "OPEN",
-            // real incidents have no synthetic ground truth - these fields exist
-            // for the eval harness on generated data, not on real ingested ones.
             expectedDiagnosis: "N/A - real incident",
             expectedAction: "N/A - real incident",
             expectedRequiresHuman: false,
@@ -158,14 +209,14 @@ const server = Bun.serve({
         const parsed = parseSlackInteractionBody(rawBody);
         if (!parsed.ok) {
           console.error("Could not parse Slack interaction:", parsed.error);
-          return new Response("", { status: 200 }); // ack anyway so Slack doesn't retry a request we'll never understand
+          return new Response("", { status: 200 });
         }
 
         const decision = parsed.data.actionId === "approve_incident" ? "approved" : "rejected";
         const notifier = new SlackNotifier(process.env.SLACK_WEBHOOK_URL!);
         await resumeIncident(parsed.data.incidentId, decision, parsed.data.slackUsername, notifier);
 
-        return new Response("", { status: 200 }); // Slack expects a fast 200, not a JSON body
+        return new Response("", { status: 200 });
       }
 
       if (url.pathname === "/api/incidents" && req.method === "GET") {
@@ -175,15 +226,124 @@ const server = Bun.serve({
           select: {
             id: true,
             title: true,
+            rawLog: true,
             service: true,
             severity: true,
             status: true,
             scenarioType: true,
             createdAt: true,
             resolvedAt: true,
+            approvedAt: true,
+            approvedBy: true,
+            rejectedAt: true,
+            rejectedBy: true,
+            rejectionReason: true,
+            executionStartedAt: true,
+            executionCompletedAt: true,
+            failureReason: true,
+            actions: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                agentType: true,
+                output: true,
+                reasoning: true,
+                confidence: true,
+                createdAt: true,
+              },
+            },
           },
         });
-        return json(incidents);
+
+        return json(
+          incidents.map((incident) => {
+            const latest = (agentType: string) =>
+              [...incident.actions].reverse().find((action) => action.agentType === agentType) ?? null;
+
+            const logAnalysis = latest("LOG_ANALYZER");
+            const diagnosis = latest("DIAGNOSIS");
+            const action = latest("ACTION");
+
+            return {
+              id: incident.id,
+              title: incident.title,
+              rawLog: incident.rawLog,
+              service: incident.service,
+              severity: incident.severity,
+              status: incident.status,
+              scenarioType: incident.scenarioType,
+              createdAt: incident.createdAt,
+              resolvedAt: incident.resolvedAt,
+              approvedAt: incident.approvedAt,
+              approvedBy: incident.approvedBy,
+              rejectedAt: incident.rejectedAt,
+              rejectedBy: incident.rejectedBy,
+              rejectionReason: incident.rejectionReason,
+              executionStartedAt: incident.executionStartedAt,
+              executionCompletedAt: incident.executionCompletedAt,
+              failureReason: incident.failureReason,
+              logAnalysis: logAnalysis?.output ?? null,
+              diagnosis: diagnosis?.output ?? null,
+              diagnosisReasoning: diagnosis?.reasoning ?? null,
+              diagnosisConfidence: diagnosis?.confidence ?? null,
+              proposedAction: action?.output ?? null,
+              actionReasoning: action?.reasoning ?? null,
+              actionConfidence: action?.confidence ?? null,
+              actions: undefined,
+            };
+          }),
+        );
+      }
+
+      const historyMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/history$/);
+      if (historyMatch && req.method === "GET") {
+        const incident = await prisma.incident.findUnique({
+          where: { id: historyMatch[1] },
+          select: {
+            id: true,
+            title: true,
+            rawLog: true,
+            service: true,
+            severity: true,
+            status: true,
+            scenarioType: true,
+            createdAt: true,
+            resolvedAt: true,
+            approvedAt: true,
+            approvedBy: true,
+            rejectedAt: true,
+            rejectedBy: true,
+            rejectionReason: true,
+            executionStartedAt: true,
+            executionCompletedAt: true,
+            failureReason: true,
+            actions: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                agentType: true,
+                input: true,
+                output: true,
+                reasoning: true,
+                confidence: true,
+                createdAt: true,
+              },
+            },
+          },
+        });
+
+        if (!incident) return json({ error: "not found" }, 404);
+
+        return json({
+          ...incident,
+          timeline: incident.actions.map((action) => ({
+            agentType: action.agentType,
+            input: action.input,
+            output: action.output,
+            reasoning: action.reasoning,
+            confidence: action.confidence,
+            createdAt: action.createdAt,
+          })),
+          actions: undefined,
+        });
       }
 
       const incidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)$/);
@@ -198,9 +358,6 @@ const server = Bun.serve({
 
       return new Response("Not found", { status: 404 });
     } catch (err) {
-      // ab koi bhi unexpected crash bhi CORS headers ke saath, clear
-      // JSON error ke roop mein aayega - "CORS blocked" wala confusing
-      // false-signal kabhi nahi dikhega, asli error seedha dikhega
       console.error("Unhandled error in dashboard server:", err);
       return json({ error: "internal server error", detail: String(err) }, 500);
     }
@@ -209,7 +366,11 @@ const server = Bun.serve({
     open(ws) {
       ws.subscribe("agent-events");
     },
-    message() { },
+    message(ws, message) {
+      if (typeof message === "string" && message === "ping") {
+        ws.send("pong");
+      }
+    },
     close(ws) {
       ws.unsubscribe("agent-events");
     },
@@ -218,10 +379,6 @@ const server = Bun.serve({
 
 console.log(`Dashboard server: http://localhost:${PORT}  (WS at /ws)`);
 
-// bridge: redis pub/sub -> this server's websocket topic. dedicated
-// connection since subscribe() holds the connection open indefinitely -
-// same reasoning as blocking stream reads needing their own connection,
-// found the hard way back in Phase 3.
 const redisSub = createStreamClient();
 await redisSub.subscribe("agent-events", (message: string) => {
   server.publish("agent-events", message);

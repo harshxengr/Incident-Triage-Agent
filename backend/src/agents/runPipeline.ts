@@ -3,14 +3,21 @@ import { prisma } from "../db/client";
 import { logAction } from "../db/logAction";
 import { GeminiClient, type LLMClient } from "../llm/client";
 import { ConsoleNotifier, type Notifier } from "../notifier/client";
+import { SimulatedActionExecutor } from "../execution/actionExecutor";
+import { transitionIncident } from "../incidents/lifecycle";
 import { analyzeLog } from "./logAnalyzer";
 import { diagnose, type CandidateDeployment } from "./diagnosis";
 import { decideAction } from "./action";
 import { communicate } from "./communicator";
 
+const executor = new SimulatedActionExecutor();
+
 export async function runPipeline(incidentId: string, llm: LLMClient, notifier: Notifier) {
   const incident = await prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
-  await prisma.incident.update({ where: { id: incidentId }, data: { status: "DIAGNOSING" } });
+
+  await transitionIncident(incidentId, "DIAGNOSING", {
+    from: ["OPEN", "DIAGNOSING"],
+  });
 
   const logAnalysis = await analyzeLog(llm, incident.rawLog);
   await logAction({
@@ -20,7 +27,6 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     output: logAnalysis,
   });
 
-  // only look at deploys to the same service, before the incident happened
   const recentDeployments = await prisma.deployment.findMany({
     where: { service: incident.service, deployedAt: { lte: incident.createdAt } },
     orderBy: { deployedAt: "desc" },
@@ -31,10 +37,20 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     id: d.id,
     commitHash: d.commitHash,
     commitMessage: d.commitMessage,
-    minutesBeforeIncident: Math.round((incident.createdAt.getTime() - d.deployedAt.getTime()) / 60_000),
+    minutesBeforeIncident: Math.round(
+      (incident.createdAt.getTime() - d.deployedAt.getTime()) / 60_000,
+    ),
   }));
 
   const diagnosis = await diagnose(llm, logAnalysis, candidates);
+
+  await transitionIncident(incidentId, "DIAGNOSED", {
+    from: "DIAGNOSING",
+    data: {
+      suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+    },
+  });
+
   await logAction({
     incidentId,
     agentType: "DIAGNOSIS",
@@ -44,6 +60,42 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
   });
 
   const actionDecision = await decideAction(llm, diagnosis);
+
+  await transitionIncident(incidentId, "ACTION_PROPOSED", {
+    from: "DIAGNOSED",
+    data: {
+      resolvedAt: null,
+      failureReason: null,
+      suspectedDeploymentId: diagnosis.suspectedDeploymentId,
+    },
+  });
+
+  let execution: import("../execution/actionExecutor").ExecutionResult | undefined;
+
+  if (actionDecision.requiresHuman) {
+    await transitionIncident(incidentId, "PENDING_APPROVAL", {
+      from: "ACTION_PROPOSED",
+    });
+  } else {
+    await transitionIncident(incidentId, "EXECUTING", {
+      from: "ACTION_PROPOSED",
+      data: { executionStartedAt: new Date() },
+    });
+
+    execution = await executor.execute(actionDecision.action, actionDecision.target);
+    actionDecision.execution = execution;
+
+    const succeeded = execution.executed === true;
+    await transitionIncident(incidentId, succeeded ? "RESOLVED" : "FAILED", {
+      from: "EXECUTING",
+      data: {
+        resolvedAt: succeeded ? new Date() : null,
+        executionCompletedAt: new Date(),
+        failureReason: succeeded ? null : execution.detail,
+      },
+    });
+  }
+
   await logAction({
     incidentId,
     agentType: "ACTION",
@@ -53,16 +105,15 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     confidence: actionDecision.confidence,
   });
 
-  await prisma.incident.update({
-    where: { id: incidentId },
-    data: {
-      status: actionDecision.requiresHuman ? "PENDING_APPROVAL" : "RESOLVED",
-      resolvedAt: actionDecision.requiresHuman ? null : new Date(),
-      suspectedDeploymentId: diagnosis.suspectedDeploymentId,
-    },
-  });
+  const communicatorOutput = await communicate(
+    llm,
+    notifier,
+    incidentId,
+    incident.title,
+    diagnosis,
+    actionDecision,
+  );
 
-  const communicatorOutput = await communicate(llm, notifier, incidentId, incident.title, diagnosis, actionDecision);
   await logAction({
     incidentId,
     agentType: "COMMUNICATOR",

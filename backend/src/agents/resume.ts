@@ -3,6 +3,7 @@ import { logAction } from "../db/logAction";
 import type { Notifier } from "../notifier/client";
 import { createStreamClient } from "../streams/client";
 import { SimulatedActionExecutor } from "../execution/actionExecutor";
+import { transitionIncident } from "../incidents/lifecycle";
 
 export type ResumeDecision = "approved" | "rejected";
 
@@ -18,15 +19,38 @@ export async function resumeIncident(
     notifier: Notifier,
     rejectionReason?: string
 ): Promise<ResumeResult> {
-    const updated = await prisma.incident.updateMany({
-        where: { id: incidentId, status: "PENDING_APPROVAL" },
-        data: {
-            status: decision === "approved" ? "FAILED" : "REJECTED",
-            resolvedAt: new Date(),
-        },
+    const priorAction = await prisma.agentAction.findFirst({
+        where: { incidentId, agentType: "ACTION" },
+        orderBy: { createdAt: "desc" },
     });
 
-    if (updated.count === 0) {
+    if (!priorAction) {
+        return { ok: false, reason: "No proposed action exists for this incident." };
+    }
+
+    const now = new Date();
+    try {
+        if (decision === "approved") {
+            await transitionIncident(incidentId, "APPROVED", {
+                from: "PENDING_APPROVAL",
+                data: {
+                    approvedAt: now,
+                    approvedBy: decidedBy,
+                    failureReason: null,
+                },
+            });
+        } else {
+            await transitionIncident(incidentId, "REJECTED", {
+                from: "PENDING_APPROVAL",
+                data: {
+                    rejectedAt: now,
+                    rejectedBy: decidedBy,
+                    rejectionReason: rejectionReason ?? null,
+                    resolvedAt: now,
+                },
+            });
+        }
+    } catch (error) {
         const existing = await prisma.incident.findUnique({
             where: { id: incidentId },
             select: { status: true },
@@ -34,22 +58,34 @@ export async function resumeIncident(
 
         return {
             ok: false,
-            reason: existing
-                ? `Incident exists but its status is "${existing.status}", not PENDING_APPROVAL.`
-                : `No incident found with id "${incidentId}".`,
+            reason:
+                existing
+                    ? `Incident exists but its status is "${existing.status}", not PENDING_APPROVAL.`
+                    : `No incident found with id "${incidentId}".`,
         };
     }
 
-    const priorAction = await prisma.agentAction.findFirstOrThrow({
-        where: { incidentId, agentType: "ACTION" },
-        orderBy: { createdAt: "desc" },
-    });
+    let execution: import("../execution/actionExecutor").ExecutionResult | undefined;
 
     if (decision === "approved") {
+        await transitionIncident(incidentId, "EXECUTING", {
+            from: "APPROVED",
+            data: { executionStartedAt: new Date() },
+        });
+
         const executor = new SimulatedActionExecutor();
         const proposedAction = priorAction.output as { action: string; target: string | null };
-        const execution = await executor.execute(proposedAction.action as any, proposedAction.target);
-        console.log("Execution result:", execution);
+        execution = await executor.execute(proposedAction.action as any, proposedAction.target);
+
+        const resolved = execution.executed === true;
+        await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+            from: "EXECUTING",
+            data: {
+                resolvedAt: resolved ? new Date() : null,
+                executionCompletedAt: new Date(),
+                failureReason: resolved ? null : execution.detail,
+            },
+        });
     }
 
     const broadcastClient = createStreamClient();
@@ -57,10 +93,13 @@ export async function resumeIncident(
         incidentId,
         agentType: "ORCHESTRATOR",
         input: { decision, decidedBy, rejectionReason },
-        output: { proposedAction: priorAction.output },
+        output: {
+            proposedAction: priorAction.output,
+            execution: execution ?? null,
+        },
         reasoning:
             decision === "approved"
-                ? `${decidedBy} approved the proposed action.`
+                ? `${decidedBy} approved the proposed action.${execution?.simulated ? " Execution was simulated." : ""}`
                 : `${decidedBy} rejected the proposed action.${rejectionReason ? ` Reason: ${rejectionReason}` : ""}`,
         broadcast: broadcastClient,
     });
@@ -70,7 +109,7 @@ export async function resumeIncident(
 
     const message =
         decision === "approved"
-            ? `Incident "${incident.title}" approved by ${decidedBy}, but the simulated action was not executed.`
+            ? `Incident "${incident.title}" approved by ${decidedBy}. ${execution?.detail ?? "Action submitted."}`
             : `Incident "${incident.title}" rejected by ${decidedBy}.${rejectionReason ? ` Reason: ${rejectionReason}` : ""} Needs manual follow-up.`;
 
     await notifier.send(message);
