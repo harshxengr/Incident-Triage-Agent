@@ -18,7 +18,7 @@ class RateLimiter {
     private readonly windowMs: number,
   ) { }
 
-  allows(key: string): boolean {
+  check(key: string): { allowed: boolean; retryAfterSeconds: number } {
     const now = Date.now();
     const recent = (this.requests.get(key) ?? []).filter(
       (timestamp) => now - timestamp < this.windowMs,
@@ -26,12 +26,17 @@ class RateLimiter {
 
     if (recent.length >= this.limit) {
       this.requests.set(key, recent);
-      return false;
+      const oldest = recent[0] ?? now;
+      const retryAfterMs = Math.max(0, this.windowMs - (now - oldest));
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000)),
+      };
     }
 
     recent.push(now);
     this.requests.set(key, recent);
-    return true;
+    return { allowed: true, retryAfterSeconds: 0 };
   }
 }
 
@@ -82,8 +87,22 @@ const server = Bun.serve({
 
       if (url.pathname === "/demo/trigger" && req.method === "POST") {
         const clientIp = req.headers.get("x-forwarded-for") ?? "unknown";
-        if (!demoLimiter.allows(clientIp)) {
-          return json({ error: "Please wait a bit before triggering another demo incident." }, 429);
+        const rate = demoLimiter.check(clientIp);
+        if (!rate.allowed) {
+          return new Response(
+            JSON.stringify({
+              error: "Demo incident rate limit reached.",
+              retryAfterSeconds: rate.retryAfterSeconds,
+            }),
+            {
+              status: 429,
+              headers: {
+                ...CORS_HEADERS,
+                "Retry-After": String(rate.retryAfterSeconds),
+                "Content-Type": "application/json",
+              },
+            },
+          );
         }
 
         try {
