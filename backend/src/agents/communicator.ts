@@ -20,9 +20,13 @@ export async function communicate(
   const raw = await llm.complete(COMMUNICATOR_SYSTEM, communicatorPrompt(incidentTitle, diagnosis, action));
   const { summary } = parseLLMJson(raw, isSummary);
 
-  const actionable = action.requiresHuman
-    ? `\n\nTo approve: bun run src/agents/approve.ts ${incidentId}\nTo reject: bun run src/agents/reject.ts ${incidentId} "<reason>"`
-    : "";
+
+  const actionable =
+    action.action === "escalateToHuman"
+      ? "\n\nHuman investigation required. No remediation was executed automatically."
+      : action.requiresHuman
+        ? `\n\nTo approve: bun run src/agents/approve.ts ${incidentId}\nTo reject: bun run src/agents/reject.ts ${incidentId} "<reason>"`
+        : "";
 
   await notifier.send(summary + actionable);
 

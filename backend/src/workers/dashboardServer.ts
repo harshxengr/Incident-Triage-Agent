@@ -9,6 +9,12 @@ import { STREAMS } from "../streams/topics";
 import { resumeIncident } from "../agents/resume";
 import { ConsoleNotifier, SlackNotifier } from "../notifier/client";
 import { triggerDemoIncident } from "../streams/triggerDemoIncident";
+import {
+  isPublicDemoScenario,
+  PUBLIC_DEMO_SCENARIOS,
+} from "../publicDemo";
+import { transitionIncident } from "../incidents/lifecycle";
+import { logAction } from "../db/logAction";
 
 class RateLimiter {
   private readonly requests = new Map<string, number[]>();
@@ -154,6 +160,106 @@ const server = Bun.serve({
         return json(result, result.ok ? 200 : 409);
       }
 
+
+      const escalationResolutionMatch = url.pathname.match(
+        /^\/api\/incidents\/([^/]+)\/resolve-escalation$/,
+      );
+
+      if (escalationResolutionMatch && req.method === "POST") {
+        const operatorKey =
+          process.env.DASHBOARD_OPERATOR_KEY ??
+          process.env.WEBHOOK_API_KEY ??
+          "";
+
+        if (!operatorKey || !checkApiKey(req, operatorKey)) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        const body = await readJson(req);
+        const payload =
+          typeof body === "object" && body !== null
+            ? body as { decidedBy?: unknown; reason?: unknown }
+            : {};
+
+        const incidentId = escalationResolutionMatch[1];
+        const decidedBy =
+          typeof payload.decidedBy === "string"
+            ? payload.decidedBy.trim()
+            : "";
+        const reason =
+          typeof payload.reason === "string"
+            ? payload.reason.trim()
+            : "";
+
+        if (!incidentId || !decidedBy || !reason) {
+          return json(
+            { error: "Incident ID, operator and resolution reason are required." },
+            400,
+          );
+        }
+
+        // Only permit resolution of synthetic demo incidents through
+        // this dashboard endpoint.
+        const incident = await prisma.incident.findFirst({
+          where: {
+            id: incidentId,
+            status: "ESCALATED",
+            scenarioType: {
+              in: [...PUBLIC_DEMO_SCENARIOS],
+            },
+          },
+          select: { id: true },
+        });
+
+        if (!incident) {
+          return json(
+            { error: "No matching escalated demo incident is available." },
+            409,
+          );
+        }
+
+        try {
+          await transitionIncident(incidentId, "RESOLVED", {
+            from: "ESCALATED",
+            data: {
+              resolvedAt: new Date(),
+              failureReason: null,
+            },
+          });
+        } catch {
+          return json(
+            { error: "The incident changed state. Refresh and try again if it is still escalated." },
+            409,
+          );
+        }
+
+        const auditClient = createStreamClient();
+
+        try {
+          await logAction({
+            incidentId,
+            agentType: "ORCHESTRATOR",
+            input: {
+              decision: "resolved_escalation",
+              decidedBy,
+              reason,
+            },
+            output: {
+              decision: "resolved_escalation",
+              decidedBy,
+              reason,
+            },
+            reasoning: `Human investigation marked complete by ${decidedBy}: ${reason}`,
+            broadcast: auditClient,
+          });
+        } finally {
+          auditClient.close();
+        }
+
+        return json({ ok: true });
+      }
+
+
       if (url.pathname === "/webhook/incident" && req.method === "POST") {
         if (!checkApiKey(req, process.env.WEBHOOK_API_KEY!)) {
           return json({ error: "unauthorized" }, 401);
@@ -221,6 +327,11 @@ const server = Bun.serve({
 
       if (url.pathname === "/api/incidents" && req.method === "GET") {
         const incidents = await prisma.incident.findMany({
+          where: {
+            scenarioType: {
+              in: [...PUBLIC_DEMO_SCENARIOS],
+            },
+          },
           orderBy: { createdAt: "desc" },
           take: 50,
           select: {
@@ -297,7 +408,12 @@ const server = Bun.serve({
       const historyMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/history$/);
       if (historyMatch && req.method === "GET") {
         const incident = await prisma.incident.findUnique({
-          where: { id: historyMatch[1] },
+          where: {
+            id: historyMatch[1],
+            scenarioType: {
+              in: [...PUBLIC_DEMO_SCENARIOS],
+            },
+          },
           select: {
             id: true,
             title: true,
@@ -348,12 +464,51 @@ const server = Bun.serve({
 
       const incidentMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)$/);
       if (incidentMatch && req.method === "GET") {
-        const incident = await prisma.incident.findUnique({
-          where: { id: incidentMatch[1] },
-          include: { actions: { orderBy: { createdAt: "asc" } } },
+
+        const incident = await prisma.incident.findFirst({
+          where: {
+            id: incidentMatch[1],
+            scenarioType: {
+              in: [...PUBLIC_DEMO_SCENARIOS],
+            },
+          },
+          select: {
+            id: true,
+            title: true,
+            rawLog: true,
+            service: true,
+            severity: true,
+            status: true,
+            scenarioType: true,
+            createdAt: true,
+            resolvedAt: true,
+            approvedAt: true,
+            approvedBy: true,
+            rejectedAt: true,
+            rejectedBy: true,
+            rejectionReason: true,
+            executionStartedAt: true,
+            executionCompletedAt: true,
+            failureReason: true,
+            actions: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                agentType: true,
+                output: true,
+                reasoning: true,
+                confidence: true,
+                createdAt: true,
+              },
+            },
+          },
         });
-        if (!incident) return json({ error: "not found" }, 404);
+
+        if (!incident) {
+          return json({ error: "not found" }, 404);
+        }
+
         return json(incident);
+
       }
 
       return new Response("Not found", { status: 404 });
@@ -379,7 +534,42 @@ const server = Bun.serve({
 
 console.log(`Dashboard server: http://localhost:${PORT}  (WS at /ws)`);
 
+
 const redisSub = createStreamClient();
+
 await redisSub.subscribe("agent-events", (message: string) => {
-  server.publish("agent-events", message);
+  void publishPublicDemoEvent(message).catch((error) => {
+    console.error("Failed to validate public demo event:", error);
+  });
 });
+
+async function publishPublicDemoEvent(message: string): Promise<void> {
+  let event: unknown;
+
+  try {
+    event = JSON.parse(message);
+  } catch {
+    return;
+  }
+
+  if (typeof event !== "object" || event === null) {
+    return;
+  }
+
+  const incidentId = (event as Record<string, unknown>).incidentId;
+
+  if (typeof incidentId !== "string") {
+    return;
+  }
+
+  const incident = await prisma.incident.findUnique({
+    where: { id: incidentId },
+    select: { scenarioType: true },
+  });
+
+  if (!incident || !isPublicDemoScenario(incident.scenarioType)) {
+    return;
+  }
+
+  server.publish("agent-events", message);
+}

@@ -19,24 +19,6 @@ import { AgentEventFeed } from "@/components/dashboard/agent-event-feed";
 
 const OPERATOR_KEY_STORAGE = "incident-triage-dashboard-operator-key";
 
-const LIFECYCLE_STEPS = [
-  "OPEN",
-  "DIAGNOSING",
-  "DIAGNOSED",
-  "ACTION_PROPOSED",
-  "PENDING_APPROVAL",
-  "APPROVED",
-  "EXECUTING",
-  "RESOLVED",
-] as const;
-
-function lifecycleIndex(status: string): number {
-  if (status === "REJECTED" || status === "FAILED") {
-    return LIFECYCLE_STEPS.indexOf("PENDING_APPROVAL");
-  }
-  return Math.max(0, LIFECYCLE_STEPS.indexOf(status as (typeof LIFECYCLE_STEPS)[number]));
-}
-
 export default function Dashboard() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [triggering, setTriggering] = useState(false);

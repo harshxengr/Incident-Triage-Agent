@@ -9,6 +9,7 @@ import { STREAMS, GROUPS } from "../streams/topics";
 import { markIncidentDeadLettered } from "./deadLetterIncident";
 import { SimulatedActionExecutor } from "../execution/actionExecutor";
 import { transitionIncident } from "../incidents/lifecycle";
+import { classifyActionHandling } from "../agents/actionOutcome";
 
 const executor = new SimulatedActionExecutor();
 const llm = new GeminiClient(process.env.GEMINI_API_KEY!);
@@ -42,29 +43,60 @@ runWorker(
       },
     });
 
-    if (!actionDecision.requiresHuman) {
+
+    const handling = classifyActionHandling(
+      actionDecision.action,
+      actionDecision.requiresHuman,
+    );
+
+    if (handling === "NO_ACTION_REQUIRED") {
+      await transitionIncident(incidentId, "NO_ACTION_REQUIRED", {
+        from: "ACTION_PROPOSED",
+        data: { failureReason: null },
+      });
+    } else if (handling === "ESCALATED") {
+      await transitionIncident(incidentId, "ESCALATED", {
+        from: "ACTION_PROPOSED",
+        data: {
+          resolvedAt: null,
+          failureReason: null,
+        },
+      });
+    } else if (handling === "PENDING_APPROVAL") {
+      await transitionIncident(incidentId, "PENDING_APPROVAL", {
+        from: "ACTION_PROPOSED",
+      });
+    } else {
       await transitionIncident(incidentId, "EXECUTING", {
         from: "ACTION_PROPOSED",
         data: { executionStartedAt: new Date() },
       });
 
-      const execution = await executor.execute(actionDecision.action, actionDecision.target);
+      const execution = await executor.execute(
+        actionDecision.action,
+        actionDecision.target,
+      );
+
       actionDecision.execution = execution;
 
-      const resolved = executionSucceeded(execution);
-      await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+      const finalStatus = execution.simulated
+        ? "SIMULATED"
+        : execution.executed
+          ? "RESOLVED"
+          : "FAILED";
+
+      await transitionIncident(incidentId, finalStatus, {
         from: "EXECUTING",
         data: {
-          resolvedAt: resolved ? new Date() : null,
+          resolvedAt:
+            finalStatus === "RESOLVED" ? new Date() : null,
           executionCompletedAt: new Date(),
-          failureReason: resolved ? null : execution.detail,
+          failureReason:
+            finalStatus === "FAILED" ? execution.detail : null,
         },
       });
-    } else {
-      await transitionIncident(incidentId, "PENDING_APPROVAL", {
-        from: "ACTION_PROPOSED",
-      });
     }
+
 
     await logAction({
       incidentId,
