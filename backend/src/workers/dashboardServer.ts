@@ -146,6 +146,38 @@ const server = Bun.serve({
           return json({ error: "missing incident id" }, 400);
         }
 
+        // The public dashboard may only approve or reject synthetic demo incidents.
+        // Real incidents created through /webhook/incident must not be managed here.
+        const eligibleIncident = await prisma.incident.findFirst({
+          where: {
+            id: incidentId,
+            scenarioType: {
+              in: [...PUBLIC_DEMO_SCENARIOS],
+            },
+          },
+          select: {
+            id: true,
+            status: true,
+          },
+        });
+
+        if (!eligibleIncident) {
+          return json(
+            { error: "No matching demo incident is available." },
+            404,
+          );
+        }
+
+        if (eligibleIncident.status !== "PENDING_APPROVAL") {
+          return json(
+            {
+              ok: false,
+              reason: `Incident status is "${eligibleIncident.status}", not PENDING_APPROVAL.`,
+            },
+            409,
+          );
+        }
+
         const decision = approvalMatch[2] === "approve" ? "approved" : "rejected";
         const result = await resumeIncident(
           incidentId,
