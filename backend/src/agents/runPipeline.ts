@@ -124,6 +124,14 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     });
   }
 
+  await logAction({
+    incidentId,
+    agentType: "ACTION",
+    input: { diagnosis },
+    output: actionDecision,
+    reasoning: actionDecision.reasoning,
+    confidence: actionDecision.confidence,
+  });
 
   const communicatorOutput = await communicate(
     llm,
