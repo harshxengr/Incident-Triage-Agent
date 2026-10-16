@@ -129,7 +129,7 @@ const server = Bun.serve({
       const approvalMatch = url.pathname.match(/^\/api\/incidents\/([^/]+)\/(approve|reject)$/);
       if (approvalMatch && req.method === "POST") {
         const dashboardOperatorKey =
-          process.env.DASHBOARD_OPERATOR_KEY ?? process.env.WEBHOOK_API_KEY ?? "";
+          process.env.DASHBOARD_OPERATOR_KEY ?? "";
 
         if (!dashboardOperatorKey || !checkApiKey(req, dashboardOperatorKey)) {
           return json({ error: "unauthorized" }, 401);
@@ -199,9 +199,7 @@ const server = Bun.serve({
 
       if (escalationResolutionMatch && req.method === "POST") {
         const operatorKey =
-          process.env.DASHBOARD_OPERATOR_KEY ??
-          process.env.WEBHOOK_API_KEY ??
-          "";
+          process.env.DASHBOARD_OPERATOR_KEY ?? "";
 
         if (!operatorKey || !checkApiKey(req, operatorKey)) {
           return json({ error: "unauthorized" }, 401);
