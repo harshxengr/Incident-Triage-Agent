@@ -29,9 +29,50 @@ export interface ActionDecision extends ProposedAction {
   execution?: import("../execution/actionExecutor").ExecutionResult;
 }
 
-export async function decideAction(llm: LLMClient, diagnosis: Diagnosis): Promise<ActionDecision> {
-  const raw = await llm.complete(ACTION_SYSTEM, actionPrompt(diagnosis));
+export async function decideAction(
+  llm: LLMClient,
+  diagnosis: Diagnosis,
+): Promise<ActionDecision> {
+  const raw = await llm.complete(
+    ACTION_SYSTEM,
+    actionPrompt(diagnosis),
+  );
+
   const proposed = parseLLMJson(raw, isProposedAction);
+
+  // A rollback must target an explicitly identified deployment.
+  // Never allow the model to guess or substitute the target.
+  if (proposed.action === "rollbackDeployment") {
+    if (!diagnosis.suspectedDeploymentId) {
+      return {
+        ...proposed,
+        action: "escalateToHuman",
+        target: null,
+        reasoning:
+          "Rollback was proposed without a specific identified deployment. Escalating instead of guessing the target.",
+        confidence: Math.min(proposed.confidence, 0.5),
+        requiresHuman: true,
+      };
+    }
+
+    return {
+      ...proposed,
+      target: diagnosis.suspectedDeploymentId,
+      requiresHuman: true,
+    };
+  }
+
+  // These actions do not need a resource target.
+  if (
+    proposed.action === "monitor" ||
+    proposed.action === "escalateToHuman"
+  ) {
+    return {
+      ...proposed,
+      target: null,
+      requiresHuman: requiresHumanApproval(proposed.action),
+    };
+  }
 
   return {
     ...proposed,

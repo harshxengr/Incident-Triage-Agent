@@ -8,10 +8,14 @@ export type IncidentStatus =
   | "PENDING_APPROVAL"
   | "APPROVED"
   | "EXECUTING"
+  | "NO_ACTION_REQUIRED"
+  | "ESCALATED"
+  | "SIMULATED"
   | "RESOLVED"
   | "REJECTED"
   | "FALSE_POSITIVE"
   | "FAILED";
+
 
 const ACTIVE_STATUSES: IncidentStatus[] = [
   "OPEN",
@@ -21,23 +25,43 @@ const ACTIVE_STATUSES: IncidentStatus[] = [
   "PENDING_APPROVAL",
   "APPROVED",
   "EXECUTING",
+  "ESCALATED",
 ];
 
 const TERMINAL_STATUSES: IncidentStatus[] = [
+  "NO_ACTION_REQUIRED",
+  "SIMULATED",
   "RESOLVED",
   "REJECTED",
-  "FAILED",
   "FALSE_POSITIVE",
+  "FAILED",
 ];
 
-const ALLOWED_TRANSITIONS: Record<IncidentStatus, readonly IncidentStatus[]> = {
+const ALLOWED_TRANSITIONS: Record<
+  IncidentStatus,
+  readonly IncidentStatus[]
+> = {
   OPEN: ["DIAGNOSING", "FAILED"],
   DIAGNOSING: ["DIAGNOSED", "FAILED"],
   DIAGNOSED: ["ACTION_PROPOSED", "FAILED"],
-  ACTION_PROPOSED: ["PENDING_APPROVAL", "EXECUTING", "FAILED"],
+
+  ACTION_PROPOSED: [
+    "PENDING_APPROVAL",
+    "EXECUTING",
+    "NO_ACTION_REQUIRED",
+    "ESCALATED",
+    "FAILED",
+  ],
+
   PENDING_APPROVAL: ["APPROVED", "REJECTED", "FAILED"],
   APPROVED: ["EXECUTING", "FAILED"],
-  EXECUTING: ["RESOLVED", "FAILED"],
+
+  EXECUTING: ["RESOLVED", "SIMULATED", "FAILED"],
+
+  ESCALATED: ["RESOLVED", "FAILED"],
+
+  NO_ACTION_REQUIRED: [],
+  SIMULATED: [],
   RESOLVED: [],
   REJECTED: [],
   FALSE_POSITIVE: [],

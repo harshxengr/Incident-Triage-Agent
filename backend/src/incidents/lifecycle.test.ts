@@ -36,4 +36,35 @@ describe("incident lifecycle", () => {
     expect(isTerminalStatus("FAILED")).toBe(true);
     expect(isTerminalStatus("PENDING_APPROVAL")).toBe(false);
   });
+
+
+  test("allows no-action and escalation outcomes", () => {
+    expect(
+      canTransition("ACTION_PROPOSED", "NO_ACTION_REQUIRED"),
+    ).toBe(true);
+
+    expect(
+      canTransition("ACTION_PROPOSED", "ESCALATED"),
+    ).toBe(true);
+
+    expect(
+      canTransition("ESCALATED", "RESOLVED"),
+    ).toBe(true);
+  });
+
+  test("keeps escalation active until handled", () => {
+    expect(isActiveStatus("ESCALATED")).toBe(true);
+    expect(isTerminalStatus("ESCALATED")).toBe(false);
+  });
+
+  test("distinguishes simulated execution from real resolution", () => {
+    expect(canTransition("EXECUTING", "SIMULATED")).toBe(true);
+    expect(isTerminalStatus("SIMULATED")).toBe(true);
+
+    expect(canTransition("EXECUTING", "RESOLVED")).toBe(true);
+    expect(isTerminalStatus("RESOLVED")).toBe(true);
+
+    expect(canTransition("SIMULATED", "RESOLVED")).toBe(false);
+  });
+
 });

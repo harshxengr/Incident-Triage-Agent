@@ -1,91 +1,149 @@
+
 import { prisma } from "../db/client";
-import { generateDeploymentPool, generateIncidents } from "./scenarios";
+import {
+  generateDeploymentPool,
+  generateIncidents,
+} from "./scenarios";
 import type { GeneratedDeployment } from "../types";
 
 const DEPLOYMENT_COUNT = 15;
 const INCIDENT_COUNT = 20;
 
-async function seedDeployments(): Promise<GeneratedDeployment[]> {
-    const deployments = generateDeploymentPool(DEPLOYMENT_COUNT);
+type PersistedDeployment = GeneratedDeployment & {
+  id: string;
+};
 
-    // createMany doesn't return rows, and we need real ids for the incident
-    // relation, so inserting one at a time here. fine for a seed script.
-    const created = [];
-    for (const d of deployments) {
-        created.push(await prisma.deployment.create({ data: d }));
-    }
-
-    console.log(`Seeded ${created.length} deployments.`);
-    return deployments;
+function toPersistedDeployment(row: {
+  id: string;
+  service: string;
+  commitHash: string;
+  commitMessage: string;
+  deployedBy: string;
+  deployedAt: Date;
+}): PersistedDeployment {
+  return {
+    id: row.id,
+    service: row.service as GeneratedDeployment["service"],
+    commitHash: row.commitHash,
+    commitMessage: row.commitMessage,
+    deployedBy: row.deployedBy,
+    deployedAt: row.deployedAt,
+  };
 }
 
-async function seedIncidents(deployments: GeneratedDeployment[]) {
-    const dbDeployments = await prisma.deployment.findMany({
-        orderBy: { deployedAt: "asc" },
+async function seedDeployments(): Promise<PersistedDeployment[]> {
+  const generated = generateDeploymentPool(DEPLOYMENT_COUNT);
+  const created: PersistedDeployment[] = [];
+
+  for (const deployment of generated) {
+    const row = await prisma.deployment.create({
+      data: deployment,
     });
 
-    if (dbDeployments.length === 0) {
-        throw new Error("No deployments in DB yet - run seed:deployments first (or seed:all).");
-    }
+    created.push(toPersistedDeployment(row));
+  }
 
-    const incidents = generateIncidents(INCIDENT_COUNT, deployments);
-    let created = 0;
-
-    for (const inc of incidents) {
-        const suspectedDeploymentId =
-            inc.suspectedDeploymentIndex !== null
-                ? dbDeployments[inc.suspectedDeploymentIndex]?.id ?? null
-                : null;
-
-        await prisma.incident.create({
-            data: {
-                title: inc.title,
-                rawLog: inc.rawLog,
-                service: inc.service,
-                severity: inc.severity,
-                status: inc.status,
-                suspectedDeploymentId,
-                createdAt: inc.createdAt,
-                expectedDiagnosis: inc.expectedDiagnosis,
-                expectedAction: inc.expectedAction,
-                expectedRequiresHuman: inc.expectedRequiresHuman,
-                scenarioType: inc.scenarioType,
-            },
-        });
-        created++;
-    }
-
-    console.log(`Seeded ${created} incidents.`);
-
-    const byType = await prisma.incident.groupBy({
-        by: ["scenarioType"],
-        _count: true,
-    });
-    console.log("Distribution by scenario type:", byType);
+  console.log(`Seeded ${created.length} deployments.`);
+  return created;
 }
 
-async function main() {
-    const mode = process.argv[2] ?? "all";
+async function loadPersistedDeployments(): Promise<
+  PersistedDeployment[]
+> {
+  const rows = await prisma.deployment.findMany({
+    orderBy: { deployedAt: "asc" },
+  });
 
-    if (mode === "deployments" || mode === "all") {
-        const deployments = await seedDeployments();
-        if (mode === "all") await seedIncidents(deployments);
-    } else if (mode === "incidents") {
-        // only makes sense right after seeding deployments in the same run -
-        // for a clean slate use seed:all instead
-        const deployments = generateDeploymentPool(DEPLOYMENT_COUNT);
-        await seedIncidents(deployments);
-    } else {
-        console.error(`Unknown mode "${mode}". Use: deployments | incidents | all`);
-        process.exit(1);
+  return rows.map(toPersistedDeployment);
+}
+
+async function seedIncidents(
+  deployments: PersistedDeployment[],
+): Promise<void> {
+  if (deployments.length === 0) {
+    throw new Error(
+      "No deployments in DB yet. Run seed:deployments or seed:all first.",
+    );
+  }
+
+  // Generate incidents against the exact persisted deployment objects
+  // whose IDs will be used for the incident relationship.
+  const incidents = generateIncidents(
+    INCIDENT_COUNT,
+    deployments,
+  );
+
+  let created = 0;
+
+  for (const incident of incidents) {
+    const index = incident.suspectedDeploymentIndex;
+
+    const suspectedDeployment =
+      index === null ? null : deployments[index];
+
+    if (index !== null && !suspectedDeployment) {
+      throw new Error(
+        `Missing deployment at index ${index} for incident "${incident.title}".`,
+      );
     }
+
+    const suspectedDeploymentId =
+      suspectedDeployment?.id ?? null;
+
+    await prisma.incident.create({
+      data: {
+        title: incident.title,
+        rawLog: incident.rawLog,
+        service: incident.service,
+        severity: incident.severity,
+        status: incident.status,
+        suspectedDeploymentId,
+        createdAt: incident.createdAt,
+        expectedDiagnosis: incident.expectedDiagnosis,
+        expectedAction: incident.expectedAction,
+        expectedRequiresHuman:
+          incident.expectedRequiresHuman,
+        scenarioType: incident.scenarioType,
+      },
+    });
+
+    created++;
+  }
+
+  console.log(`Seeded ${created} incidents.`);
+
+  const distribution = await prisma.incident.groupBy({
+    by: ["scenarioType"],
+    _count: true,
+  });
+
+  console.log("Distribution by scenario type:", distribution);
+}
+
+async function main(): Promise<void> {
+  const mode = process.argv[2] ?? "all";
+
+  if (mode === "deployments") {
+    await seedDeployments();
+  } else if (mode === "all") {
+    const deployments = await seedDeployments();
+    await seedIncidents(deployments);
+  } else if (mode === "incidents") {
+    const deployments = await loadPersistedDeployments();
+    await seedIncidents(deployments);
+  } else {
+    console.error(
+      `Unknown mode "${mode}". Use: deployments | incidents | all`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 main()
-    .catch((err) => {
-        console.error("Seed failed:", err);
-        process.exit(1);
-    })
-    .finally(async () => {
-        await prisma.$disconnect();
-    });
+  .catch((error) => {
+    console.error("Seed failed:", error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

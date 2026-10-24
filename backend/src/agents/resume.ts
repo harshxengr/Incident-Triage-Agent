@@ -46,7 +46,7 @@ export async function resumeIncident(
                     rejectedAt: now,
                     rejectedBy: decidedBy,
                     rejectionReason: rejectionReason ?? null,
-                    resolvedAt: now,
+                    resolvedAt: null,
                 },
             });
         }
@@ -77,15 +77,24 @@ export async function resumeIncident(
         const proposedAction = priorAction.output as { action: string; target: string | null };
         execution = await executor.execute(proposedAction.action as any, proposedAction.target);
 
-        const resolved = execution.executed === true;
-        await transitionIncident(incidentId, resolved ? "RESOLVED" : "FAILED", {
+
+        const finalStatus = execution.simulated
+            ? "SIMULATED"
+            : execution.executed
+                ? "RESOLVED"
+                : "FAILED";
+
+        await transitionIncident(incidentId, finalStatus, {
             from: "EXECUTING",
             data: {
-                resolvedAt: resolved ? new Date() : null,
+                resolvedAt:
+                    finalStatus === "RESOLVED" ? new Date() : null,
                 executionCompletedAt: new Date(),
-                failureReason: resolved ? null : execution.detail,
+                failureReason:
+                    finalStatus === "FAILED" ? execution.detail : null,
             },
         });
+
     }
 
     const broadcastClient = createStreamClient();

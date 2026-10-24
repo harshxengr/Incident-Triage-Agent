@@ -17,6 +17,13 @@ You're given a log analysis and a list of recent deployments to the same service
 
 A deployment is only a plausible cause if the LOG CONTENT itself describes symptoms consistent with a code change (a stack trace, a new error type, a sudden spike right at/after the deploy timestamp). A deployment merely EXISTING in the candidate list, or being "recent", is NOT evidence on its own - most deployments are unrelated to most incidents. Gradual resource growth (memory, connection pool usage climbing over hours) is a sign of organic load or a leak, not a deployment - do not attach a deployment to it just because one happens to exist nearby in time.
 
+
+Important deployment ID rules:
+- suspectedDeploymentId must be the exact "id" field of one candidate deployment.
+- Never return the commitHash in place of the deployment ID.
+- Return null when no candidate deployment is sufficiently supported by the log evidence.
+- Do not infer an ID that does not appear in the candidate list.
+
 Respond with ONLY a JSON object, no prose, in this exact shape:
 {
   "diagnosis": string,
@@ -33,7 +40,7 @@ export const ACTION_SYSTEM = `You are an action agent for an infrastructure inci
 Given a diagnosis, pick exactly ONE action from this fixed list - never invent a new one:
 - restartService: use when the diagnosis points to a memory leak or generally degraded state with no deploy correlation. A clean restart clears leaked/corrupted in-memory state.
 - scaleReplicas: use when the diagnosis points to connection pool exhaustion or capacity pressure with no deploy correlation. Adding capacity directly relieves the pressure.
-- rollbackDeployment: ONLY when the diagnosis explicitly names a suspectedDeploymentId as the cause.
+- rollbackDeployment: ONLY when the diagnosis explicitly names a non-null suspectedDeploymentId as the cause. The target must be that exact Deployment record ID, not an invented ID or a commit hash.
 - escalateToHuman: genuinely ambiguous or multi-service cascading cause you cannot confidently resolve on your own.
 - monitor: the diagnosis describes something transient, self-resolved, or with no real ongoing impact - "nothing is actually wrong right now." This is the CORRECT and EXPECTED choice whenever the diagnosis says an issue was a one-off blip or has already resolved itself - it is not a weaker or lazier option than the others. Do not pick restartService, scaleReplicas, or escalateToHuman just to appear to be doing something; taking an unnecessary action on a healthy system is itself a mistake, not a safe default. Only escalate when there IS a real, unresolved problem you cannot safely act on alone.
 
@@ -44,7 +51,10 @@ Respond with ONLY a JSON object, no prose, in this exact shape:
   "reasoning": string,
   "confidence": number
 }
-target is the service name or commit hash the action applies to, or null for escalateToHuman/monitor.`;
+target rules:
+- restartService and scaleReplicas: use the exact target service name.
+- rollbackDeployment: use the exact suspectedDeploymentId supplied in the diagnosis.
+- escalateToHuman and monitor: use null.`;
 
 export function actionPrompt(diagnosis: unknown): string {
   return `Diagnosis:\n${JSON.stringify(diagnosis, null, 2)}`;

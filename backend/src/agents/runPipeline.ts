@@ -9,6 +9,7 @@ import { analyzeLog } from "./logAnalyzer";
 import { diagnose, type CandidateDeployment } from "./diagnosis";
 import { decideAction } from "./action";
 import { communicate } from "./communicator";
+import { classifyActionHandling } from "./actionOutcome";
 
 const executor = new SimulatedActionExecutor();
 
@@ -70,9 +71,25 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
     },
   });
 
-  let execution: import("../execution/actionExecutor").ExecutionResult | undefined;
+  const handling = classifyActionHandling(
+    actionDecision.action,
+    actionDecision.requiresHuman,
+  );
 
-  if (actionDecision.requiresHuman) {
+  if (handling === "NO_ACTION_REQUIRED") {
+    await transitionIncident(incidentId, "NO_ACTION_REQUIRED", {
+      from: "ACTION_PROPOSED",
+      data: { failureReason: null },
+    });
+  } else if (handling === "ESCALATED") {
+    await transitionIncident(incidentId, "ESCALATED", {
+      from: "ACTION_PROPOSED",
+      data: {
+        resolvedAt: null,
+        failureReason: null,
+      },
+    });
+  } else if (handling === "PENDING_APPROVAL") {
     await transitionIncident(incidentId, "PENDING_APPROVAL", {
       from: "ACTION_PROPOSED",
     });
@@ -82,16 +99,27 @@ export async function runPipeline(incidentId: string, llm: LLMClient, notifier: 
       data: { executionStartedAt: new Date() },
     });
 
-    execution = await executor.execute(actionDecision.action, actionDecision.target);
+    const execution = await executor.execute(
+      actionDecision.action,
+      actionDecision.target,
+    );
+
     actionDecision.execution = execution;
 
-    const succeeded = execution.executed === true;
-    await transitionIncident(incidentId, succeeded ? "RESOLVED" : "FAILED", {
+    const finalStatus = execution.simulated
+      ? "SIMULATED"
+      : execution.executed
+        ? "RESOLVED"
+        : "FAILED";
+
+    await transitionIncident(incidentId, finalStatus, {
       from: "EXECUTING",
       data: {
-        resolvedAt: succeeded ? new Date() : null,
+        resolvedAt:
+          finalStatus === "RESOLVED" ? new Date() : null,
         executionCompletedAt: new Date(),
-        failureReason: succeeded ? null : execution.detail,
+        failureReason:
+          finalStatus === "FAILED" ? execution.detail : null,
       },
     });
   }
