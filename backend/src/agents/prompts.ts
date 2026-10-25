@@ -60,7 +60,7 @@ export function actionPrompt(diagnosis: unknown): string {
   return `Diagnosis:\n${JSON.stringify(diagnosis, null, 2)}`;
 }
 
-export const COMMUNICATOR_SYSTEM = `You write incident summaries for a Slack channel read by on-call engineers.
+export const COMMUNICATOR_SYSTEM = `You write concise incident summaries for on-call engineers.
 Be concise and factual, 3-4 sentences. Mention the service, the diagnosis, the action taken or proposed, and whether it needs human approval.
 Respond with ONLY a JSON object, no prose, in this exact shape:
 {

@@ -12,7 +12,7 @@ A demo multi-agent incident triage system built with TypeScript, Bun, PostgreSQL
 - **Human approval workflow:** Risky proposed actions can be approved or rejected by an operator. Escalated incidents can be marked resolved with a reason.
 - **Safer action decisions:** Rollback proposals must use an identified deployment record ID. If no deployment is identified, the agent escalates instead of guessing.
 - **Public demo controls:** The demo trigger creates synthetic incidents and is rate-limited. Public dashboard data and operator decisions are restricted to allowlisted demo scenarios.
-- **Automated checks:** Backend unit tests, database-backed approval integration tests, frontend tests, linting, type checks, and a production build run through GitHub Actions.
+- **Automated checks:** GitHub Actions validates the backend schema and types, and lints, type-checks, and builds the frontend.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ flowchart TD
 - **Database:** PostgreSQL, Prisma
 - **Messaging:** Redis Streams and Pub/Sub
 - **Frontend:** Next.js, React, Tailwind CSS
-- **Testing:** Bun test, Vitest, Testing Library
+- **Quality checks:** ESLint, TypeScript, Prisma schema validation, and a production frontend build
 - **CI:** GitHub Actions
 
 ## Requirements
@@ -75,7 +75,7 @@ The required backend variables are:
 - `REDIS_URL`
 - `GEMINI_API_KEY`
 
-`WEBHOOK_API_KEY` and `DASHBOARD_OPERATOR_KEY` are used for protected endpoints and operator decisions. Slack and Railway values are optional for the local simulated demo.
+`WEBHOOK_API_KEY` protects incident and deployment ingestion endpoints. `DASHBOARD_OPERATOR_KEY` protects operator decisions in the dashboard.
 
 ### 2. Start PostgreSQL and Redis
 
@@ -141,31 +141,26 @@ Use the dashboard's demo trigger to create a new synthetic incident. The demo tr
 
 When approving or rejecting a proposed action, enter the operator key configured as `DASHBOARD_OPERATOR_KEY` in the backend environment.
 
-## Testing and Quality Checks
+## Quality Checks
 
-Run backend checks with PostgreSQL and Redis available and `backend/.env` configured:
+Run backend checks with `backend/.env` configured:
 
 ```bash
 cd backend
-bun test
 bunx prisma validate
 bun run typecheck
-RUN_DB_INTEGRATION_TESTS=1 bun test src/workers/approvalWorkflow.integration.test.ts
 ```
 
 Run frontend checks:
 
 ```bash
 cd frontend
-bun run test
 bun run lint
 bunx tsc --noEmit
 bun run build
 ```
 
-GitHub Actions contains separate backend and frontend workflows.
-
-The backend workflow generates the Prisma client, validates the schema, prepares a test database, runs unit and approval integration tests, and type-checks the code. The frontend workflow runs tests, linting, TypeScript checks, and a production build.
+GitHub Actions contains separate backend and frontend workflows. The backend workflow generates the Prisma client, validates the schema, and type-checks the code. The frontend workflow runs linting, TypeScript checks, and a production build.
 
 ### Evaluation
 

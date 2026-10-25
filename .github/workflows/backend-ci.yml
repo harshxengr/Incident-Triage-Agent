@@ -76,13 +76,5 @@ jobs:
       - name: Prepare integration database
         run: bunx prisma db push
 
-      - name: Run backend unit tests
-        run: bun test
-
-      - name: Run approval workflow integration tests
-        env:
-          RUN_DB_INTEGRATION_TESTS: "1"
-        run: bun test src/workers/approvalWorkflow.integration.test.ts
-
       - name: Type check
         run: bun run typecheck

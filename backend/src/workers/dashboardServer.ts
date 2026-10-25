@@ -2,12 +2,11 @@ import { prisma } from "../db/client";
 import { createStreamClient, xadd } from "../streams/client";
 import { checkEnv } from "../config/checkEnv";
 checkEnv();
-import { checkApiKey, verifySlackSignature } from "../security/auth";
+import { checkApiKey } from "../security/auth";
 import { validateIncidentPayload, validateDeploymentPayload } from "../webhooks/validate";
-import { parseSlackInteractionBody } from "../webhooks/slackInteraction";
 import { STREAMS } from "../streams/topics";
 import { resumeIncident } from "../agents/resume";
-import { ConsoleNotifier, SlackNotifier } from "../notifier/client";
+import { ConsoleNotifier } from "../notifier/client";
 import { triggerDemoIncident } from "../streams/triggerDemoIncident";
 import {
   isPublicDemoScenario,
@@ -326,33 +325,6 @@ const server = Bun.serve({
 
         const deployment = await prisma.deployment.create({ data: validation.data });
         return json({ id: deployment.id }, 201);
-      }
-
-      if (url.pathname === "/slack/interactions" && req.method === "POST") {
-        const rawBody = await req.text();
-
-        const sig = verifySlackSignature({
-          signingSecret: process.env.SLACK_SIGNING_SECRET!,
-          timestampHeader: req.headers.get("x-slack-request-timestamp"),
-          signatureHeader: req.headers.get("x-slack-signature"),
-          rawBody,
-        });
-        if (!sig.valid) {
-          console.error("Rejected Slack interaction:", sig.reason);
-          return new Response("unauthorized", { status: 401 });
-        }
-
-        const parsed = parseSlackInteractionBody(rawBody);
-        if (!parsed.ok) {
-          console.error("Could not parse Slack interaction:", parsed.error);
-          return new Response("", { status: 200 });
-        }
-
-        const decision = parsed.data.actionId === "approve_incident" ? "approved" : "rejected";
-        const notifier = new SlackNotifier(process.env.SLACK_WEBHOOK_URL!);
-        await resumeIncident(parsed.data.incidentId, decision, parsed.data.slackUsername, notifier);
-
-        return new Response("", { status: 200 });
       }
 
       if (url.pathname === "/api/incidents" && req.method === "GET") {
