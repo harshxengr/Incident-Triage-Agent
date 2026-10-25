@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   validate:
-    name: Test and build frontend
+    name: Lint, type-check, and build frontend
     runs-on: ubuntu-latest
 
     defaults:

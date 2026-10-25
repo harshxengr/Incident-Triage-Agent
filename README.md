@@ -206,12 +206,9 @@ Set `NEXT_PUBLIC_API_BASE` to the publicly reachable dashboard API URL and confi
 
 Before publishing a demo, verify WebSocket connectivity, health checks, database connectivity, worker health, and the full incident workflow in the deployed environment.
 
-The `RailwayActionExecutor` in the codebase is a reference starting point, not a production-ready integration. Service IDs need configuration, and rollback is not implemented there.
-
 ## Current Limitations
 
 - The default executor **simulates actions**. It does not modify real infrastructure.
-- The Railway executor is incomplete and should be treated as a reference implementation only.
 - Synthetic demo incidents and externally ingested incidents serve different purposes. The public demo UI is not a substitute for a production incident-management interface.
 - Production deployment still requires environment-specific security review, observability, backup and recovery planning, and live end-to-end verification.
 - Human approval and audit logging do not, by themselves, make real infrastructure remediation safe for production use.

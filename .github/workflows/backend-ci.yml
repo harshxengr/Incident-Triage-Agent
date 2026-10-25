@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   validate:
-    name: Test and type-check backend
+    name: Validate backend
     runs-on: ubuntu-latest
 
     services:
