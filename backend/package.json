@@ -23,8 +23,7 @@
     "enqueue-all": "bun run src/streams/enqueueAllOpen.ts",
     "eval": "bun run src/eval/runEval.ts",
     "dev:all": "concurrently -n workers,dashboard -c blue,green \"bun run workers:start\" \"bun run dashboard-server\"",
-    "wait-batch": "bun run src/eval/waitForBatch.ts",
-    "test:lifecycle": "bun test src/incidents/lifecycle.test.ts"
+    "wait-batch": "bun run src/eval/waitForBatch.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
